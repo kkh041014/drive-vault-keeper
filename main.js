@@ -156,8 +156,8 @@ function md5ArrayBuffer(buffer) {
 }
 
 const DEFAULT_SETTINGS = {
-  clientId: '',
-  clientSecret: '',
+  clientId: '202264815644.apps.googleusercontent.com',
+  clientSecret: 'X4Z3ca8xfWDb1Voo-F9a7ZxJ',
   refreshToken: '',
   remoteFolderName: 'Obsidian_Archive_Vault',
   remoteRootFolderId: '',
