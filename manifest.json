@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-drive-keeper",
+  "name": "Obsidian Drive Vault Keeper",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Mirror and back up your entire Obsidian vault untouched (1:1 binary preservation) to Google Drive once a day, and restore/sync on demand across macOS, Windows, and Android.",
+  "author": "kkh041014",
+  "authorUrl": "https://github.com/kkh041014",
+  "isDesktopOnly": false
+}
