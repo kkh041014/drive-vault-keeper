@@ -4,8 +4,6 @@ const obsidian = require('obsidian');
 
 // ============================================================================
 // Pure JS MD5 implementation (Works on macOS, Windows, and Android WebView)
-// Used to compare local binary files against Google Drive's md5Checksum
-// without modifying a single byte.
 // ============================================================================
 function md5ArrayBuffer(buffer) {
   const bytes = new Uint8Array(buffer);
@@ -155,6 +153,10 @@ function md5ArrayBuffer(buffer) {
   return (wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d)).toLowerCase();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const DEFAULT_SETTINGS = {
   clientId: '202264815644.apps.googleusercontent.com',
   clientSecret: 'X4Z3ca8xfWDb1Voo-F9a7ZxJ',
@@ -181,12 +183,10 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     this.accessTokenExpiry = 0;
     this.logs = [];
 
-    // Ribbon Icon (Works on Desktop left sidebar & Android mobile ribbon)
     this.addRibbonIcon('cloud', 'Obsidian Drive Vault Keeper 열기', () => {
       new DriveKeeperModal(this.app, this).open();
     });
 
-    // Status Bar item (Desktop)
     if (!obsidian.Platform.isMobile) {
       this.statusBarItem = this.addStatusBarItem();
       this.updateStatusBar('☁️ Drive 대기 중');
@@ -195,7 +195,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       });
     }
 
-    // Commands (Accessible via Cmd/Ctrl+P or mobile swipe down)
     this.addCommand({
       id: 'open-drive-keeper-dashboard',
       name: '대시보드 열기 (업로드 / 동기화 관리)',
@@ -216,12 +215,10 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
     this.addSettingTab(new DriveKeeperSettingTab(this.app, this));
 
-    // Check daily auto-backup schedule every 60 seconds
     this.registerInterval(
       window.setInterval(() => this.checkDailySchedule(), 60 * 1000)
     );
 
-    // Also check 15 seconds after startup if today's backup was missed
     window.setTimeout(() => {
       if (this.settings.enableDailyAutoBackup && this.settings.backupOnStartupIfMissed) {
         this.checkDailySchedule(true);
@@ -239,7 +236,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     const timeStr = new Date().toLocaleTimeString();
     const line = `[${timeStr}] ${msg}`;
     this.logs.unshift(line);
-    if (this.logs.length > 80) this.logs.pop();
+    if (this.logs.length > 100) this.logs.pop();
     if (this.onLogUpdate) this.onLogUpdate(this.logs);
   }
 
@@ -266,7 +263,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
     const today = this.getTodayDateString();
     if (this.settings.lastBackupDate === today) {
-      return; // Already backed up today
+      return;
     }
 
     const now = new Date();
@@ -284,14 +281,31 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
   }
 
   // ==========================================================================
-  // Google OAuth2 & Drive v3 REST API Layer (Uses Obsidian's requestUrl for CORS-free mobile/desktop support)
+  // Resilient Request Layer with Exponential Backoff (Handles 403 Rate Limit & 429)
   // ==========================================================================
+  async requestWithRetry(reqOptions, maxRetries = 8) {
+    let attempt = 0;
+    while (true) {
+      const resp = await obsidian.requestUrl(Object.assign({ throw: false }, reqOptions));
+      if (resp.status >= 200 && resp.status < 300) {
+        return resp;
+      }
+      if ((resp.status === 403 || resp.status === 429 || resp.status >= 500) && attempt < maxRetries) {
+        attempt++;
+        const waitMs = Math.min(12000, 800 * Math.pow(1.7, attempt) + Math.floor(Math.random() * 500));
+        await sleep(waitMs);
+        continue;
+      }
+      return resp;
+    }
+  }
+
   async getValidAccessToken() {
     if (this.accessToken && Date.now() < this.accessTokenExpiry - 60000) {
       return this.accessToken;
     }
     if (!this.isConfigured()) {
-      throw new Error('Google Drive 연결 설정(Client ID / Secret / Refresh Token)이 완료되지 않았습니다.');
+      throw new Error('Google Drive 연결 설정이 완료되지 않았습니다.');
     }
 
     const body = new URLSearchParams({
@@ -301,15 +315,15 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       grant_type: 'refresh_token'
     }).toString();
 
-    const resp = await obsidian.requestUrl({
+    const resp = await this.requestWithRetry({
       url: 'https://oauth2.googleapis.com/token',
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     });
 
-    if (resp.status !== 200 || !resp.json.access_token) {
-      throw new Error(`Google 액세스 토큰 갱신 실패: ${resp.text}`);
+    if (resp.status !== 200 || !resp.json || !resp.json.access_token) {
+      throw new Error(`Google 액세스 토큰 갱신 실패: HTTP ${resp.status} ${resp.text}`);
     }
 
     this.accessToken = resp.json.access_token;
@@ -317,51 +331,27 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     return this.accessToken;
   }
 
-  async exchangeAuthCodeForToken(authCode) {
-    const body = new URLSearchParams({
-      code: authCode.trim(),
-      client_id: this.settings.clientId.trim(),
-      client_secret: this.settings.clientSecret.trim(),
-      redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
-      grant_type: 'authorization_code'
-    }).toString();
-
-    const resp = await obsidian.requestUrl({
-      url: 'https://oauth2.googleapis.com/token',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body
-    });
-
-    if (resp.status !== 200 || !resp.json.refresh_token) {
-      throw new Error('토큰 발급에 실패했습니다. 인증 코드를 다시 확인해주세요.');
-    }
-
-    this.settings.refreshToken = resp.json.refresh_token;
-    this.accessToken = resp.json.access_token;
-    this.accessTokenExpiry = Date.now() + (resp.json.expires_in || 3600) * 1000;
-    await this.saveSettings();
-  }
-
   async driveRequest(url, options = {}) {
     const token = await this.getValidAccessToken();
     const headers = Object.assign({}, options.headers || {}, {
       Authorization: `Bearer ${token}`
     });
-    return obsidian.requestUrl(Object.assign({}, options, { url, headers }));
+    const resp = await this.requestWithRetry(Object.assign({}, options, { url, headers }));
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new Error(`Drive API 오류 (HTTP ${resp.status}): ${resp.text ? resp.text.slice(0, 200) : ''}`);
+    }
+    return resp;
   }
 
   async ensureRemoteRootFolder() {
     if (this.settings.remoteRootFolderId) {
-      try {
-        const checkResp = await this.driveRequest(
-          `https://www.googleapis.com/drive/v3/files/${this.settings.remoteRootFolderId}?fields=id,name,trashed`
-        );
-        if (checkResp.status === 200 && !checkResp.json.trashed) {
-          return this.settings.remoteRootFolderId;
-        }
-      } catch (e) {
-        // Folder might have been deleted, search or recreate below
+      const token = await this.getValidAccessToken();
+      const checkResp = await this.requestWithRetry({
+        url: `https://www.googleapis.com/drive/v3/files/${this.settings.remoteRootFolderId}?fields=id,name,trashed`,
+        headers: { Authorization: `Bearer ${token}` }
+      }, 3);
+      if (checkResp.status === 200 && checkResp.json && !checkResp.json.trashed) {
+        return this.settings.remoteRootFolderId;
       }
     }
 
@@ -379,7 +369,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       return this.settings.remoteRootFolderId;
     }
 
-    // Create new root folder on Google Drive
     const createResp = await this.driveRequest('https://www.googleapis.com/drive/v3/files?fields=id', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -395,52 +384,44 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     return this.settings.remoteRootFolderId;
   }
 
-  // Recursively list all folders and files inside the Google Drive root folder
   async buildRemoteTree(rootFolderId) {
-    const foldersByPath = new Map(); // relPath -> folderId
-    const filesByPath = new Map();   // relPath -> { id, name, md5Checksum, size, modifiedTime, parentId }
+    const foldersByPath = new Map();
+    const filesByPath = new Map();
     foldersByPath.set('', rootFolderId);
 
-    // Queue of { id, pathPrefix }
     const queue = [{ id: rootFolderId, pathPrefix: '' }];
 
     while (queue.length > 0) {
-      // Process up to 4 folders in parallel for speed
-      const batch = queue.splice(0, 4);
-      await Promise.all(
-        batch.map(async (currentFolder) => {
-          let pageToken = '';
-          do {
-            const q = encodeURIComponent(`'${currentFolder.id}' in parents and trashed = false`);
-            const url = `https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,mimeType,md5Checksum,size,modifiedTime)&pageToken=${pageToken}`;
-            const resp = await this.driveRequest(url);
-            const files = (resp.json && resp.json.files) || [];
-            for (const item of files) {
-              const relPath = currentFolder.pathPrefix ? `${currentFolder.pathPrefix}/${item.name}` : item.name;
-              if (item.mimeType === 'application/vnd.google-apps.folder') {
-                foldersByPath.set(relPath, item.id);
-                queue.push({ id: item.id, pathPrefix: relPath });
-              } else {
-                filesByPath.set(relPath, {
-                  id: item.id,
-                  name: item.name,
-                  md5Checksum: item.md5Checksum || '',
-                  size: Number(item.size || 0),
-                  modifiedTime: item.modifiedTime,
-                  parentId: currentFolder.id
-                });
-              }
-            }
-            pageToken = (resp.json && resp.json.nextPageToken) || '';
-          } while (pageToken);
-        })
-      );
+      const currentFolder = queue.shift();
+      let pageToken = '';
+      do {
+        const q = encodeURIComponent(`'${currentFolder.id}' in parents and trashed = false`);
+        const url = `https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,mimeType,md5Checksum,size,modifiedTime)&pageToken=${pageToken}`;
+        const resp = await this.driveRequest(url);
+        const files = (resp.json && resp.json.files) || [];
+        for (const item of files) {
+          const relPath = currentFolder.pathPrefix ? `${currentFolder.pathPrefix}/${item.name}` : item.name;
+          if (item.mimeType === 'application/vnd.google-apps.folder') {
+            foldersByPath.set(relPath, item.id);
+            queue.push({ id: item.id, pathPrefix: relPath });
+          } else {
+            filesByPath.set(relPath, {
+              id: item.id,
+              name: item.name,
+              md5Checksum: item.md5Checksum || '',
+              size: Number(item.size || 0),
+              modifiedTime: item.modifiedTime,
+              parentId: currentFolder.id
+            });
+          }
+        }
+        pageToken = (resp.json && resp.json.nextPageToken) || '';
+      } while (pageToken);
     }
 
     return { foldersByPath, filesByPath };
   }
 
-  // Ensure a nested relative folder path exists on Google Drive and return its folderId
   async ensureRemoteSubfolder(relFolderPath, foldersByPath) {
     if (!relFolderPath) return foldersByPath.get('');
     if (foldersByPath.has(relFolderPath)) return foldersByPath.get(relFolderPath);
@@ -470,7 +451,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     return parentId;
   }
 
-  // Upload or update a binary file untouched via Resumable Upload (Supports arbitrary sizes & exact binary preservation)
   async uploadBinaryFile(relPath, arrayBuffer, parentFolderId, existingFileId = null) {
     const fileName = relPath.split('/').pop();
     const metadata = existingFileId
@@ -484,7 +464,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     const initMethod = existingFileId ? 'PATCH' : 'POST';
     const token = await this.getValidAccessToken();
 
-    const initResp = await obsidian.requestUrl({
+    const initResp = await this.requestWithRetry({
       url: initUrl,
       method: initMethod,
       headers: {
@@ -496,16 +476,20 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       body: JSON.stringify(metadata)
     });
 
+    if (initResp.status < 200 || initResp.status >= 300) {
+      throw new Error(`업로드 초기화 실패 (${relPath}): HTTP ${initResp.status} ${initResp.text}`);
+    }
+
     const uploadLocation =
       initResp.headers['location'] ||
       initResp.headers['Location'] ||
-      Object.entries(initResp.headers).find(([k]) => k.toLowerCase() === 'location')?.[1];
+      Object.entries(initResp.headers || {}).find(([k]) => k.toLowerCase() === 'location')?.[1];
 
     if (!uploadLocation) {
-      throw new Error(`Resumable 업로드 세션 생성 실패: ${relPath}`);
+      throw new Error(`Resumable 업로드 URL 수신 실패: ${relPath}`);
     }
 
-    const putResp = await obsidian.requestUrl({
+    const putResp = await this.requestWithRetry({
       url: uploadLocation,
       method: 'PUT',
       headers: {
@@ -519,22 +503,121 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     }
   }
 
-  // Download a binary file untouched from Google Drive
   async downloadBinaryFile(fileId) {
     const token = await this.getValidAccessToken();
-    const resp = await obsidian.requestUrl({
+    const resp = await this.requestWithRetry({
       url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`
       }
     });
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new Error(`파일 다운로드 실패 (${fileId}): HTTP ${resp.status}`);
+    }
     return resp.arrayBuffer;
   }
 
   // ==========================================================================
-  // Local Vault Scanner (Cross-platform via Vault.adapter)
+  // Desktop High-Speed rclone Engine (When running on macOS/Windows with rclone installed)
+  // Falls back seamlessly to pure JS REST API on Android or when rclone is absent
   // ==========================================================================
+  async tryDesktopRcloneSync(direction, progressCallback) {
+    if (obsidian.Platform.isMobile) return false;
+
+    try {
+      const cp = require('child_process');
+      const fs = require('fs');
+      const rcloneBin = fs.existsSync('/opt/homebrew/bin/rclone')
+        ? '/opt/homebrew/bin/rclone'
+        : fs.existsSync('/usr/local/bin/rclone')
+        ? '/usr/local/bin/rclone'
+        : null;
+
+      if (!rcloneBin) return false;
+
+      const vaultBasePath = this.app.vault.adapter.getBasePath();
+      const remoteFolder = this.settings.remoteFolderName || 'Obsidian_Archive_Vault';
+
+      // Ensure rclone config has fresh token from plugin settings
+      const tokenJson = JSON.stringify({
+        access_token: await this.getValidAccessToken(),
+        token_type: 'Bearer',
+        refresh_token: this.settings.refreshToken.trim(),
+        expiry: new Date(Date.now() + 3500 * 1000).toISOString()
+      });
+
+      await new Promise((resolve) => {
+        cp.execFile(
+          rcloneBin,
+          ['config', 'create', 'gdrive', 'drive', 'token', tokenJson, '--non-interactive'],
+          () => resolve()
+        );
+      });
+
+      const excludes = ['--exclude', '.DS_Store', '--exclude', 'Thumbs.db', '--exclude', '.git/**'];
+      if (!this.settings.includeObsidianConfig) {
+        excludes.push('--exclude', '.obsidian/**');
+      } else {
+        excludes.push('--exclude', '.obsidian/plugins/obsidian-drive-keeper/data.json');
+      }
+
+      const src = direction === 'push' ? vaultBasePath : `gdrive:${remoteFolder}`;
+      const dst = direction === 'push' ? `gdrive:${remoteFolder}` : vaultBasePath;
+      const subcmd = direction === 'pull' && this.settings.deleteExtraneousOnPull ? 'sync' : 'copy';
+
+      const args = [
+        subcmd,
+        src,
+        dst,
+        ...excludes,
+        '--transfers', '4',
+        '--checkers', '8',
+        '--tpslimit', '8',
+        '--stats', '1s',
+        '--stats-one-line',
+        '-v'
+      ];
+
+      this.addLog(`⚡ 데스크톱 고속 전송 엔진(rclone) 가동: ${subcmd.toUpperCase()} (${src} -> ${dst})`);
+
+      await new Promise((resolve, reject) => {
+        const proc = cp.spawn(rcloneBin, args);
+        let fileCount = 0;
+
+        const handleOutput = (data) => {
+          const lines = data.toString().split('\n');
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.includes('Copied (new)') || line.includes('Copied (replaced existing)')) {
+              fileCount++;
+              const parts = line.split(':');
+              const fName = parts.length > 2 ? parts.slice(2).join(':').trim() : line;
+              this.addLog(`✅ 전송 완료: ${fName}`);
+              if (progressCallback) progressCallback(fileCount, fileCount + 5, `전송 완료: ${fName}`);
+            } else if (line.includes('%') && progressCallback) {
+              progressCallback(50, 100, `전송 진행 중: ${line}`);
+            }
+          }
+        };
+
+        proc.stdout.on('data', handleOutput);
+        proc.stderr.on('data', handleOutput);
+
+        proc.on('close', (code) => {
+          if (code === 0) resolve(fileCount);
+          else reject(new Error(`rclone 종료 코드: ${code}`));
+        });
+      });
+
+      return true;
+    } catch (e) {
+      this.addLog(`ℹ️ 기본 REST 엔진으로 전환합니다 (${e.message})`);
+      return false;
+    }
+  }
+
   shouldIgnorePath(relPath) {
     const name = relPath.split('/').pop();
     if (name === '.DS_Store' || name === 'Thumbs.db' || name === 'desktop.ini') {
@@ -549,7 +632,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
         return true;
       }
     } else {
-      // Even when syncing .obsidian, never overwrite the plugin's own token/state file while running
       const ownDataPath = `${this.app.vault.configDir}/plugins/obsidian-drive-keeper/data.json`;
       if (relPath === ownDataPath) return true;
     }
@@ -558,7 +640,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
   async listAllLocalFiles() {
     const adapter = this.app.vault.adapter;
-    const allFiles = []; // Array of { relPath, size, mtime }
+    const allFiles = [];
     const queue = [''];
 
     while (queue.length > 0) {
@@ -587,7 +669,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
   async ensureLocalParentDirs(relFilePath) {
     const parts = relFilePath.split('/');
-    parts.pop(); // remove file name
+    parts.pop();
     if (parts.length === 0) return;
 
     const adapter = this.app.vault.adapter;
@@ -601,11 +683,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     }
   }
 
-  // ==========================================================================
-  // Core Operations:
-  // 1) PUSH (모셔두기): Local Vault -> Google Drive (100% Untouched Binary Mirror)
-  // 2) PULL (동기화받기): Google Drive -> Local Vault (100% Untouched Binary Restore)
-  // ==========================================================================
   async runPushBackup(isSilentAuto = false, progressCallback = null) {
     if (this.isSyncing) {
       new obsidian.Notice('이미 동기화 작업이 진행 중입니다.');
@@ -621,9 +698,23 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     if (!isSilentAuto) {
       new obsidian.Notice('☁️ 구글 드라이브에 아카이브 업로드를 시작합니다...');
     }
-    this.addLog('🚀 [업로드 / Push] 로컬 보관함 및 구글 드라이브 파일 목록 스캔 중...');
+    this.addLog('🚀 [업로드 / Push] 시작...');
 
     try {
+      // Try high-speed resilient rclone engine on Desktop first
+      const handledByRclone = await this.tryDesktopRcloneSync('push', progressCallback);
+      if (handledByRclone) {
+        this.settings.lastBackupDate = this.getTodayDateString();
+        this.settings.lastPushTimestamp = Date.now();
+        this.settings.lastStatusSummary = `최근 업로드: ${new Date().toLocaleString()} (원본 1:1 동기화 완료)`;
+        await this.saveSettings();
+        this.addLog('🎉 구글 드라이브 1:1 무변형 업로드 완료!');
+        this.updateStatusBar('☁️ Drive 백업 완료');
+        new obsidian.Notice('✅ 구글 드라이브에 아카이브 업로드가 완료되었습니다!');
+        return;
+      }
+
+      // Pure REST API engine (Android & fallback)
       const rootFolderId = await this.ensureRemoteRootFolder();
       const [localFiles, remoteTree] = await Promise.all([
         this.listAllLocalFiles(),
@@ -650,7 +741,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
           const localMd5 = md5ArrayBuffer(buffer);
           if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
             skippedCount++;
-            continue; // Identical byte-for-byte!
+            continue;
           }
         }
 
@@ -675,7 +766,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
       this.settings.lastBackupDate = this.getTodayDateString();
       this.settings.lastPushTimestamp = Date.now();
-      this.settings.lastStatusSummary = `최근 업로드: ${new Date().toLocaleString()} (업로드 ${uploadedCount}개, 동일 파일 유지 ${skippedCount}개)`;
+      this.settings.lastStatusSummary = `최근 업로드: ${new Date().toLocaleString()} (업로드 ${uploadedCount}개, 유지 ${skippedCount}개)`;
       await this.saveSettings();
 
       this.addLog(`🎉 업로드 완료! (새로 올림: ${uploadedCount}개, 변경 없음: ${skippedCount}개)`);
@@ -705,9 +796,20 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     this.isSyncing = true;
     this.updateStatusBar('📥 Drive 동기화 중...');
     new obsidian.Notice('📥 구글 드라이브에서 아카이브 동기화(내려받기)를 시작합니다...');
-    this.addLog('🚀 [동기화 내려받기 / Pull] 구글 드라이브 파일 목록 조회 중...');
+    this.addLog('🚀 [동기화 내려받기 / Pull] 시작...');
 
     try {
+      const handledByRclone = await this.tryDesktopRcloneSync('pull', progressCallback);
+      if (handledByRclone) {
+        this.settings.lastPullTimestamp = Date.now();
+        this.settings.lastStatusSummary = `최근 동기화(Pull): ${new Date().toLocaleString()} (원본 1:1 내려받기 완료)`;
+        await this.saveSettings();
+        this.addLog('🎉 구글 드라이브 1:1 동기화 내려받기 완료!');
+        this.updateStatusBar('☁️ Drive 동기화됨');
+        new obsidian.Notice('✅ 구글 드라이브에서 아카이브 동기화가 완료되었습니다!');
+        return;
+      }
+
       const rootFolderId = await this.ensureRemoteRootFolder();
       const { filesByPath } = await this.buildRemoteTree(rootFolderId);
 
@@ -735,7 +837,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
             const localMd5 = md5ArrayBuffer(localBuffer);
             if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
               skippedCount++;
-              continue; // Already identical!
+              continue;
             }
           }
         }
@@ -751,7 +853,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
         this.addLog(`📥 내려받기 완료: ${relPath}`);
       }
 
-      // Optional: Clean up local files that do not exist in remote archive if user enabled strict mirror
       let deletedCount = 0;
       if (this.settings.deleteExtraneousOnPull) {
         const localFiles = await this.listAllLocalFiles();
@@ -765,7 +866,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       }
 
       this.settings.lastPullTimestamp = Date.now();
-      this.settings.lastStatusSummary = `최근 동기화(Pull): ${new Date().toLocaleString()} (다운로드 ${downloadedCount}개, 동일 파일 유지 ${skippedCount}개)`;
+      this.settings.lastStatusSummary = `최근 동기화(Pull): ${new Date().toLocaleString()} (다운로드 ${downloadedCount}개, 유지 ${skippedCount}개)`;
       await this.saveSettings();
 
       this.addLog(`🎉 동기화 완료! (내려받음: ${downloadedCount}개, 변경 없음: ${skippedCount}개, 삭제: ${deletedCount}개)`);
@@ -791,9 +892,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
   }
 }
 
-// ============================================================================
-// Interactive Control Modal (Works on Mac, Windows, and Android)
-// ============================================================================
 class DriveKeeperModal extends obsidian.Modal {
   constructor(app, plugin) {
     super(app);
@@ -826,7 +924,6 @@ class DriveKeeperModal extends obsidian.Modal {
     this.addStatusRow(statusCard, '오늘 자동 백업 여부', this.plugin.settings.lastBackupDate || '기록 없음');
     this.addStatusRow(statusCard, '최근 작업 요약', this.plugin.settings.lastStatusSummary);
 
-    // Progress Bar Area
     const progressWrapper = contentEl.createDiv({ cls: 'odk-progress-wrapper' });
     const progressBg = progressWrapper.createDiv({ cls: 'odk-progress-bar-bg' });
     const progressFill = progressBg.createDiv({ cls: 'odk-progress-bar-fill' });
@@ -840,10 +937,9 @@ class DriveKeeperModal extends obsidian.Modal {
       progressWrapper.addClass('is-active');
       const pct = total > 0 ? Math.round((current / total) * 100) : 0;
       progressFill.style.width = `${pct}%`;
-      progressText.setText(`(${current}/${total} - ${pct}%) ${label}`);
+      progressText.setText(`${label}`);
     };
 
-    // Action Buttons Grid
     const grid = contentEl.createDiv({ cls: 'odk-action-grid' });
 
     const pushBtn = grid.createEl('button', { cls: 'odk-action-btn odk-primary' });
@@ -854,7 +950,7 @@ class DriveKeeperModal extends obsidian.Modal {
     });
     pushBtn.addEventListener('click', async () => {
       await this.plugin.runPushBackup(false, updateProgress);
-      this.onOpen(); // refresh status
+      this.onOpen();
     });
 
     const pullBtn = grid.createEl('button', { cls: 'odk-action-btn' });
@@ -865,10 +961,9 @@ class DriveKeeperModal extends obsidian.Modal {
     });
     pullBtn.addEventListener('click', async () => {
       await this.plugin.runPullRestore(updateProgress);
-      this.onOpen(); // refresh status
+      this.onOpen();
     });
 
-    // Live Log Viewer
     contentEl.createEl('h4', { text: '실시간 작업 로그' });
     const logBox = contentEl.createDiv({ cls: 'odk-log-box' });
     const renderLogs = (logs) => {
@@ -890,14 +985,10 @@ class DriveKeeperModal extends obsidian.Modal {
   }
 }
 
-// ============================================================================
-// Plugin Settings Tab
-// ============================================================================
 class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
-    this.tempAuthCode = '';
   }
 
   display() {
@@ -906,24 +997,11 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
 
     containerEl.createEl('h2', { text: '☁️ Obsidian Drive Vault Keeper 설정' });
 
-    const guide = containerEl.createDiv({ cls: 'odk-guide-box' });
-    guide.innerHTML = `
-      <strong>💡 맥 · 윈도우 · 안드로이드 어디서나 사용하는 방법</strong>
-      <ol>
-        <li>아래 <b>Google OAuth Client ID</b>와 <b>Client Secret</b>을 입력하고 <b>[Google 로그인 페이지 열기]</b>를 눌러 인증 코드를 발급받으세요. (또는 맥북 터미널에서 제공된 1클릭 인증 스크립트를 실행하면 자동으로 채워집니다.)</li>
-        <li>메인 기기(이 맥북)에서는 <b>하루 1번 자동 업로드</b>를 켜두시면 매일 원본 그대로 구글 드라이브에 모셔둡니다.</li>
-        <li>다른 데스크톱(윈도우/맥)이나 안드로이드에서는 리본 메뉴의 <b>☁️ 구름 아이콘</b>을 눌러 <b>[그대로 동기화받기 (Pull)]</b>만 누르면 100% 똑같이 복제됩니다.</li>
-      </ol>
-    `;
-
-    containerEl.createEl('h3', { text: '1. Google Drive 계정 연결' });
-
     new obsidian.Setting(containerEl)
       .setName('Google OAuth Client ID')
-      .setDesc('Google Cloud Console에서 발급한 데스크톱 앱용 OAuth 2.0 Client ID')
+      .setDesc('기본 내장 자격증명이 설정되어 있습니다.')
       .addText((text) =>
         text
-          .setPlaceholder('xxxx.apps.googleusercontent.com')
           .setValue(this.plugin.settings.clientId)
           .onChange(async (value) => {
             this.plugin.settings.clientId = value.trim();
@@ -933,10 +1011,9 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(containerEl)
       .setName('Google OAuth Client Secret')
-      .setDesc('Google Cloud Console에서 발급한 OAuth 2.0 Client Secret')
+      .setDesc('기본 내장 자격증명이 설정되어 있습니다.')
       .addText((text) =>
         text
-          .setPlaceholder('GOCSPX-...')
           .setValue(this.plugin.settings.clientSecret)
           .onChange(async (value) => {
             this.plugin.settings.clientSecret = value.trim();
@@ -945,47 +1022,10 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
       );
 
     new obsidian.Setting(containerEl)
-      .setName('원클릭 Google Drive 연결 마법사 열기')
-      .setDesc('브라우저에서 Google Drive 연결 마법사(http://127.0.0.1:53682)를 열어 자동으로 연결합니다.')
-      .addButton((btn) =>
-        btn
-          .setButtonText('🌐 Google Drive 연결 마법사 열기')
-          .setCta()
-          .onClick(() => {
-            window.open('http://127.0.0.1:53682');
-          })
-      );
-
-    new obsidian.Setting(containerEl)
-      .setName('인증 코드로 Refresh Token 자동 발급')
-      .setDesc('로그인 후 받은 코드를 붙여넣고 [연결 완료]를 누르세요.')
-      .addText((text) =>
-        text.setPlaceholder('4/1AX4XfWh...').onChange((val) => {
-          this.tempAuthCode = val.trim();
-        })
-      )
-      .addButton((btn) =>
-        btn.setButtonText('2. 연결 완료').onClick(async () => {
-          if (!this.tempAuthCode) {
-            new obsidian.Notice('인증 코드를 입력해주세요.');
-            return;
-          }
-          try {
-            await this.plugin.exchangeAuthCodeForToken(this.tempAuthCode);
-            new obsidian.Notice('✅ Google Drive 연결에 성공했습니다!');
-            this.display();
-          } catch (e) {
-            new obsidian.Notice(`❌ 연결 실패: ${e.message}`);
-          }
-        })
-      );
-
-    new obsidian.Setting(containerEl)
-      .setName('Refresh Token (직접 입력 또는 자동 생성됨)')
-      .setDesc('한 번 발급되면 다른 기기(윈도우/안드로이드)에 그대로 복사해 쓰실 수 있습니다.')
+      .setName('Refresh Token')
+      .setDesc('발급된 Google Drive Refresh Token (다른 기기에 그대로 복사해 사용 가능)')
       .addText((text) =>
         text
-          .setPlaceholder('1//0e...')
           .setValue(this.plugin.settings.refreshToken)
           .onChange(async (value) => {
             this.plugin.settings.refreshToken = value.trim();
@@ -993,14 +1033,10 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
           })
       );
 
-    containerEl.createEl('h3', { text: '2. 구글 드라이브 보관 폴더 및 동기화 규칙' });
-
     new obsidian.Setting(containerEl)
       .setName('구글 드라이브 보관 폴더 이름')
-      .setDesc('구글 드라이브 최상단에 생성될 아카이브 전용 폴더 이름입니다.')
       .addText((text) =>
         text
-          .setPlaceholder('Obsidian_Archive_Vault')
           .setValue(this.plugin.settings.remoteFolderName)
           .onChange(async (value) => {
             this.plugin.settings.remoteFolderName = value.trim() || 'Obsidian_Archive_Vault';
@@ -1011,7 +1047,6 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(containerEl)
       .setName('이 기기에서 하루 1번 자동 업로드 사용')
-      .setDesc('켜두면 매일 지정된 시각에 자동으로 모든 변경사항을 구글 드라이브에 모셔둡니다.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.enableDailyAutoBackup).onChange(async (value) => {
           this.plugin.settings.enableDailyAutoBackup = value;
@@ -1021,10 +1056,8 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(containerEl)
       .setName('일일 자동 업로드 시각 (24시간 형식)')
-      .setDesc('예: 23:00 (밤 11시) 또는 09:00 (오전 9시)')
       .addText((text) =>
         text
-          .setPlaceholder('23:00')
           .setValue(this.plugin.settings.dailyBackupTime)
           .onChange(async (value) => {
             this.plugin.settings.dailyBackupTime = value.trim() || '23:00';
@@ -1034,7 +1067,6 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(containerEl)
       .setName('옵시디언 설정 폴더(.obsidian)도 함께 보관/동기화')
-      .setDesc('켜두면 테마, 단축키, 다른 플러그인까지 다른 기기에 똑같이 복제됩니다.')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.includeObsidianConfig).onChange(async (value) => {
           this.plugin.settings.includeObsidianConfig = value;
@@ -1043,8 +1075,7 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
       );
 
     new obsidian.Setting(containerEl)
-      .setName('내려받기(Pull) 시 구글 드라이브에 없는 로컬 파일 정리 (완전 1:1 미러링)')
-      .setDesc('켜두면 다른 데스크톱에서 동기화받을 때 구글 드라이브 원본과 100% 동일한 파일 구성으로 맞춥니다.')
+      .setName('내려받기(Pull) 시 원격에 없는 로컬 파일 정리 (완전 1:1 미러링)')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.deleteExtraneousOnPull).onChange(async (value) => {
           this.plugin.settings.deleteExtraneousOnPull = value;
