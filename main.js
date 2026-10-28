@@ -183,7 +183,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     this.accessTokenExpiry = 0;
     this.logs = [];
 
-    this.addRibbonIcon('cloud', 'Obsidian Drive Vault Keeper 열기', () => {
+    this.addRibbonIcon('cloud', 'Drive Vault Keeper 열기', () => {
       new DriveKeeperModal(this.app, this).open();
     });
 
@@ -518,104 +518,8 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     return resp.arrayBuffer;
   }
 
-  // ==========================================================================
-  // Desktop High-Speed rclone Engine (When running on macOS/Windows with rclone installed)
-  // Falls back seamlessly to pure JS REST API on Android or when rclone is absent
-  // ==========================================================================
-  async tryDesktopRcloneSync(direction, progressCallback) {
-    if (obsidian.Platform.isMobile) return false;
-
-    try {
-      const cp = require('child_process');
-      const fs = require('fs');
-      const rcloneBin = fs.existsSync('/opt/homebrew/bin/rclone')
-        ? '/opt/homebrew/bin/rclone'
-        : fs.existsSync('/usr/local/bin/rclone')
-        ? '/usr/local/bin/rclone'
-        : null;
-
-      if (!rcloneBin) return false;
-
-      const vaultBasePath = this.app.vault.adapter.getBasePath();
-      const remoteFolder = this.settings.remoteFolderName || 'Obsidian_Archive_Vault';
-
-      // Ensure rclone config has fresh token from plugin settings
-      const tokenJson = JSON.stringify({
-        access_token: await this.getValidAccessToken(),
-        token_type: 'Bearer',
-        refresh_token: this.settings.refreshToken.trim(),
-        expiry: new Date(Date.now() + 3500 * 1000).toISOString()
-      });
-
-      await new Promise((resolve) => {
-        cp.execFile(
-          rcloneBin,
-          ['config', 'create', 'gdrive', 'drive', 'token', tokenJson, '--non-interactive'],
-          () => resolve()
-        );
-      });
-
-      const excludes = ['--exclude', '.DS_Store', '--exclude', 'Thumbs.db', '--exclude', '.git/**'];
-      if (!this.settings.includeObsidianConfig) {
-        excludes.push('--exclude', '.obsidian/**');
-      } else {
-        excludes.push('--exclude', '.obsidian/plugins/obsidian-drive-keeper/data.json');
-      }
-
-      const src = direction === 'push' ? vaultBasePath : `gdrive:${remoteFolder}`;
-      const dst = direction === 'push' ? `gdrive:${remoteFolder}` : vaultBasePath;
-      const subcmd = direction === 'pull' && this.settings.deleteExtraneousOnPull ? 'sync' : 'copy';
-
-      const args = [
-        subcmd,
-        src,
-        dst,
-        ...excludes,
-        '--transfers', '4',
-        '--checkers', '8',
-        '--tpslimit', '8',
-        '--stats', '1s',
-        '--stats-one-line',
-        '-v'
-      ];
-
-      this.addLog(`⚡ 데스크톱 고속 전송 엔진(rclone) 가동: ${subcmd.toUpperCase()} (${src} -> ${dst})`);
-
-      await new Promise((resolve, reject) => {
-        const proc = cp.spawn(rcloneBin, args);
-        let fileCount = 0;
-
-        const handleOutput = (data) => {
-          const lines = data.toString().split('\n');
-          for (const rawLine of lines) {
-            const line = rawLine.trim();
-            if (!line) continue;
-            if (line.includes('Copied (new)') || line.includes('Copied (replaced existing)')) {
-              fileCount++;
-              const parts = line.split(':');
-              const fName = parts.length > 2 ? parts.slice(2).join(':').trim() : line;
-              this.addLog(`✅ 전송 완료: ${fName}`);
-              if (progressCallback) progressCallback(fileCount, fileCount + 5, `전송 완료: ${fName}`);
-            } else if (line.includes('%') && progressCallback) {
-              progressCallback(50, 100, `전송 진행 중: ${line}`);
-            }
-          }
-        };
-
-        proc.stdout.on('data', handleOutput);
-        proc.stderr.on('data', handleOutput);
-
-        proc.on('close', (code) => {
-          if (code === 0) resolve(fileCount);
-          else reject(new Error(`rclone 종료 코드: ${code}`));
-        });
-      });
-
-      return true;
-    } catch (e) {
-      this.addLog(`ℹ️ 기본 REST 엔진으로 전환합니다 (${e.message})`);
-      return false;
-    }
+  async tryDesktopRcloneSync() {
+    return false;
   }
 
   shouldIgnorePath(relPath) {
@@ -904,7 +808,7 @@ class DriveKeeperModal extends obsidian.Modal {
     contentEl.addClass('odk-modal-container');
 
     const header = contentEl.createDiv({ cls: 'odk-hero-header' });
-    header.createDiv({ cls: 'odk-hero-title', text: '☁️ Obsidian Drive Vault Keeper' });
+    header.createDiv({ cls: 'odk-hero-title', text: '☁️ Drive Vault Keeper' });
 
     const connected = this.plugin.isConfigured();
     header.createSpan({
@@ -995,7 +899,7 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: '☁️ Obsidian Drive Vault Keeper 설정' });
+    containerEl.createEl('h2', { text: '☁️ Drive Vault Keeper 설정' });
 
     new obsidian.Setting(containerEl)
       .setName('Google OAuth Client ID')
