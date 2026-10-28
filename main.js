@@ -3,154 +3,174 @@
 const obsidian = require('obsidian');
 
 // ============================================================================
-// Pure JS MD5 implementation (Works on macOS, Windows, and Android WebView)
+// Zero-Allocation Streaming MD5 (Uses only a fixed 64-byte scratch buffer!)
+// Prevents Out-Of-Memory (OOM) crashes on Android / iPad tablets.
 // ============================================================================
 function md5ArrayBuffer(buffer) {
   const bytes = new Uint8Array(buffer);
-  function rotateLeft(lValue, iShiftBits) {
-    return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits));
-  }
-  function addUnsigned(lX, lY) {
-    const lX8 = lX & 0x80000000;
-    const lY8 = lY & 0x80000000;
-    const lX4 = lX & 0x40000000;
-    const lY4 = lY & 0x40000000;
-    const lResult = (lX & 0x3fffffff) + (lY & 0x3fffffff);
-    if (lX4 & lY4) return lResult ^ 0x80000000 ^ lX8 ^ lY8;
-    if (lX4 | lY4) {
-      if (lResult & 0x40000000) return lResult ^ 0xc0000000 ^ lX8 ^ lY8;
-      else return lResult ^ 0x40000000 ^ lX8 ^ lY8;
-    } else {
-      return lResult ^ lX8 ^ lY8;
-    }
-  }
-  function F(x, y, z) { return (x & y) | (~x & z); }
-  function G(x, y, z) { return (x & z) | (y & ~z); }
-  function H(x, y, z) { return x ^ y ^ z; }
-  function I(x, y, z) { return y ^ (x | ~z); }
-  function FF(a, b, c, d, x, s, ac) {
-    a = addUnsigned(a, addUnsigned(addUnsigned(F(b, c, d), x), ac));
-    return addUnsigned(rotateLeft(a, s), b);
-  }
-  function GG(a, b, c, d, x, s, ac) {
-    a = addUnsigned(a, addUnsigned(addUnsigned(G(b, c, d), x), ac));
-    return addUnsigned(rotateLeft(a, s), b);
-  }
-  function HH(a, b, c, d, x, s, ac) {
-    a = addUnsigned(a, addUnsigned(addUnsigned(H(b, c, d), x), ac));
-    return addUnsigned(rotateLeft(a, s), b);
-  }
-  function II(a, b, c, d, x, s, ac) {
-    a = addUnsigned(a, addUnsigned(addUnsigned(I(b, c, d), x), ac));
-    return addUnsigned(rotateLeft(a, s), b);
-  }
+  const len = bytes.length;
 
-  const lByteLength = bytes.length;
-  const lNumberOfWordsTemp1 = lByteLength + 8;
-  const lNumberOfWordsTemp2 = (lNumberOfWordsTemp1 - (lNumberOfWordsTemp1 % 64)) / 64;
-  const lNumberOfWords = (lNumberOfWordsTemp2 + 1) * 16;
-  const lWordArray = new Int32Array(lNumberOfWords);
-  let lBytePosition = 0;
-  let lByteCount = 0;
-  while (lByteCount < lByteLength) {
-    const lWordCount = (lByteCount - (lByteCount % 4)) / 4;
-    lBytePosition = (lByteCount % 4) * 8;
-    lWordArray[lWordCount] = lWordArray[lWordCount] | (bytes[lByteCount] << lBytePosition);
-    lByteCount++;
+  function add32(a, b) {
+    return (a + b) | 0;
   }
-  const lWordCount = (lByteCount - (lByteCount % 4)) / 4;
-  lBytePosition = (lByteCount % 4) * 8;
-  lWordArray[lWordCount] = lWordArray[lWordCount] | (0x80 << lBytePosition);
-  lWordArray[lNumberOfWords - 2] = lByteLength << 3;
-  lWordArray[lNumberOfWords - 1] = lByteLength >>> 29;
+  function rol(x, c) {
+    return (x << c) | (x >>> (32 - c));
+  }
+  function cmn(q, a, b, x, s, t) {
+    a = add32(add32(a, q), add32(x, t));
+    return add32(rol(a, s), b);
+  }
+  function ff(a, b, c, d, x, s, t) {
+    return cmn((b & c) | (~b & d), a, b, x, s, t);
+  }
+  function gg(a, b, c, d, x, s, t) {
+    return cmn((b & d) | (c & ~d), a, b, x, s, t);
+  }
+  function hh(a, b, c, d, x, s, t) {
+    return cmn(b ^ c ^ d, a, b, x, s, t);
+  }
+  function ii(a, b, c, d, x, s, t) {
+    return cmn(c ^ (b | ~d), a, b, x, s, t);
+  }
 
   let a = 0x67452301;
   let b = 0xefcdab89;
   let c = 0x98badcfe;
   let d = 0x10325476;
 
-  for (let k = 0; k < lWordArray.length; k += 16) {
+  // Fixed 16-word (64-byte) block — zero heap growth regardless of file size
+  const M = new Int32Array(16);
+
+  function processBlock() {
     const AA = a, BB = b, CC = c, DD = d;
-    a = FF(a, b, c, d, lWordArray[k + 0], 7, 0xd76aa478);
-    d = FF(d, a, b, c, lWordArray[k + 1], 12, 0xe8c7b756);
-    c = FF(c, d, a, b, lWordArray[k + 2], 17, 0x242070db);
-    b = FF(b, c, d, a, lWordArray[k + 3], 22, 0xc1bdceee);
-    a = FF(a, b, c, d, lWordArray[k + 4], 7, 0xf57c0faf);
-    d = FF(d, a, b, c, lWordArray[k + 5], 12, 0x4787c62a);
-    c = FF(c, d, a, b, lWordArray[k + 6], 17, 0xa8304613);
-    b = FF(b, c, d, a, lWordArray[k + 7], 22, 0xfd469501);
-    a = FF(a, b, c, d, lWordArray[k + 8], 7, 0x698098d8);
-    d = FF(d, a, b, c, lWordArray[k + 9], 12, 0x8b44f7af);
-    c = FF(c, d, a, b, lWordArray[k + 10], 17, 0xffff5bb1);
-    b = FF(b, c, d, a, lWordArray[k + 11], 22, 0x895cd7be);
-    a = FF(a, b, c, d, lWordArray[k + 12], 7, 0x6b901122);
-    d = FF(d, a, b, c, lWordArray[k + 13], 12, 0xfd987193);
-    c = FF(c, d, a, b, lWordArray[k + 14], 17, 0xa679438e);
-    b = FF(b, c, d, a, lWordArray[k + 15], 22, 0x49b40821);
-    a = GG(a, b, c, d, lWordArray[k + 1], 5, 0xf61e2562);
-    d = GG(d, a, b, c, lWordArray[k + 6], 9, 0xc040b340);
-    c = GG(c, d, a, b, lWordArray[k + 11], 14, 0x265e5a51);
-    b = GG(b, c, d, a, lWordArray[k + 0], 20, 0xe9b6c7aa);
-    a = GG(a, b, c, d, lWordArray[k + 5], 5, 0xd62f105d);
-    d = GG(d, a, b, c, lWordArray[k + 10], 9, 0x02441453);
-    c = GG(c, d, a, b, lWordArray[k + 15], 14, 0xd8a1e681);
-    b = GG(b, c, d, a, lWordArray[k + 4], 20, 0xe7d3fbc8);
-    a = GG(a, b, c, d, lWordArray[k + 9], 5, 0x21e1cde6);
-    d = GG(d, a, b, c, lWordArray[k + 14], 9, 0xc33707d6);
-    c = GG(c, d, a, b, lWordArray[k + 3], 14, 0xf4d50d87);
-    b = GG(b, c, d, a, lWordArray[k + 8], 20, 0x455a14ed);
-    a = GG(a, b, c, d, lWordArray[k + 13], 5, 0xa9e3e905);
-    d = GG(d, a, b, c, lWordArray[k + 2], 9, 0xfcefa3f8);
-    c = GG(c, d, a, b, lWordArray[k + 7], 14, 0x676f02d9);
-    b = GG(b, c, d, a, lWordArray[k + 12], 20, 0x8d2a4c8a);
-    a = HH(a, b, c, d, lWordArray[k + 5], 4, 0xfffa3942);
-    d = HH(d, a, b, c, lWordArray[k + 8], 11, 0x8771f681);
-    c = HH(c, d, a, b, lWordArray[k + 11], 16, 0x6d9d6122);
-    b = HH(b, c, d, a, lWordArray[k + 14], 23, 0xfde5380c);
-    a = HH(a, b, c, d, lWordArray[k + 1], 4, 0xa4beea44);
-    d = HH(d, a, b, c, lWordArray[k + 4], 11, 0x4bdecfa9);
-    c = HH(c, d, a, b, lWordArray[k + 7], 16, 0xf6bb4b60);
-    b = HH(b, c, d, a, lWordArray[k + 10], 23, 0xbebfbc70);
-    a = HH(a, b, c, d, lWordArray[k + 13], 4, 0x289b7ec6);
-    d = HH(d, a, b, c, lWordArray[k + 0], 11, 0xeaa127fa);
-    c = HH(c, d, a, b, lWordArray[k + 3], 16, 0xd4ef3085);
-    b = HH(b, c, d, a, lWordArray[k + 6], 23, 0x04881d05);
-    a = HH(a, b, c, d, lWordArray[k + 9], 4, 0xd9d4d039);
-    d = HH(d, a, b, c, lWordArray[k + 12], 11, 0xe6db99e5);
-    c = HH(c, d, a, b, lWordArray[k + 15], 16, 0x1fa27cf8);
-    b = HH(b, c, d, a, lWordArray[k + 2], 23, 0xc4ac5665);
-    a = II(a, b, c, d, lWordArray[k + 0], 6, 0xf4292244);
-    d = II(d, a, b, c, lWordArray[k + 7], 10, 0x432aff97);
-    c = II(c, d, a, b, lWordArray[k + 14], 15, 0xab9423a7);
-    b = II(b, c, d, a, lWordArray[k + 5], 21, 0xfc93a039);
-    a = II(a, b, c, d, lWordArray[k + 12], 6, 0x655b59c3);
-    d = II(d, a, b, c, lWordArray[k + 3], 10, 0x8f0ccc92);
-    c = II(c, d, a, b, lWordArray[k + 10], 15, 0xffeff47d);
-    b = II(b, c, d, a, lWordArray[k + 1], 21, 0x85845dd1);
-    a = II(a, b, c, d, lWordArray[k + 8], 6, 0x6fa87e4f);
-    d = II(d, a, b, c, lWordArray[k + 15], 10, 0xfe2ce6e0);
-    c = II(c, d, a, b, lWordArray[k + 6], 15, 0xa3014314);
-    b = II(b, c, d, a, lWordArray[k + 13], 21, 0x4e0811a1);
-    a = II(a, b, c, d, lWordArray[k + 4], 6, 0xf7537e82);
-    d = II(d, a, b, c, lWordArray[k + 11], 10, 0xbd3af235);
-    c = II(c, d, a, b, lWordArray[k + 2], 15, 0x2ad7d2bb);
-    b = II(b, c, d, a, lWordArray[k + 9], 21, 0xeb86d391);
-    a = addUnsigned(a, AA);
-    b = addUnsigned(b, BB);
-    c = addUnsigned(c, CC);
-    d = addUnsigned(d, DD);
+    a = ff(a, b, c, d, M[0], 7, -680876936);
+    d = ff(d, a, b, c, M[1], 12, -389564586);
+    c = ff(c, d, a, b, M[2], 17, 606105819);
+    b = ff(b, c, d, a, M[3], 22, -1044525330);
+    a = ff(a, b, c, d, M[4], 7, -176418897);
+    d = ff(d, a, b, c, M[5], 12, 1200080426);
+    c = ff(c, d, a, b, M[6], 17, -1473231341);
+    b = ff(b, c, d, a, M[7], 22, -45705983);
+    a = ff(a, b, c, d, M[8], 7, 1770035416);
+    d = ff(d, a, b, c, M[9], 12, -1958414417);
+    c = ff(c, d, a, b, M[10], 17, -42063);
+    b = ff(b, c, d, a, M[11], 22, -1990404162);
+    a = ff(a, b, c, d, M[12], 7, 1804603682);
+    d = ff(d, a, b, c, M[13], 12, -40341101);
+    c = ff(c, d, a, b, M[14], 17, -1502002290);
+    b = ff(b, c, d, a, M[15], 22, 1236535329);
+
+    a = gg(a, b, c, d, M[1], 5, -165796510);
+    d = gg(d, a, b, c, M[6], 9, -1069501632);
+    c = gg(c, d, a, b, M[11], 14, 643717713);
+    b = gg(b, c, d, a, M[0], 20, -373897302);
+    a = gg(a, b, c, d, M[5], 5, -701558691);
+    d = gg(d, a, b, c, M[10], 9, 38016083);
+    c = gg(c, d, a, b, M[15], 14, -660478335);
+    b = gg(b, c, d, a, M[4], 20, -405537848);
+    a = gg(a, b, c, d, M[9], 5, 568446438);
+    d = gg(d, a, b, c, M[14], 9, -1019803690);
+    c = gg(c, d, a, b, M[3], 14, -187363961);
+    b = gg(b, c, d, a, M[8], 20, 1163531501);
+    a = gg(a, b, c, d, M[13], 5, -1444681467);
+    d = gg(d, a, b, c, M[2], 9, -51403784);
+    c = gg(c, d, a, b, M[7], 14, 1735328473);
+    b = gg(b, c, d, a, M[12], 20, -1926607734);
+
+    a = hh(a, b, c, d, M[5], 4, -378558);
+    d = hh(d, a, b, c, M[8], 11, -2022574463);
+    c = hh(c, d, a, b, M[11], 16, 1839030562);
+    b = hh(b, c, d, a, M[14], 23, -35309556);
+    a = hh(a, b, c, d, M[1], 4, -1530992060);
+    d = hh(d, a, b, c, M[4], 11, 1272893353);
+    c = hh(c, d, a, b, M[7], 16, -155497632);
+    b = hh(b, c, d, a, M[10], 23, -1094730640);
+    a = hh(a, b, c, d, M[13], 4, 681279174);
+    d = hh(d, a, b, c, M[0], 11, -358537222);
+    c = hh(c, d, a, b, M[3], 16, -722521979);
+    b = hh(b, c, d, a, M[6], 23, 76029189);
+    a = hh(a, b, c, d, M[9], 4, -640364487);
+    d = hh(d, a, b, c, M[12], 11, -421815835);
+    c = hh(c, d, a, b, M[15], 16, 530742520);
+    b = hh(b, c, d, a, M[2], 23, -995338651);
+
+    a = ii(a, b, c, d, M[0], 6, -198630844);
+    d = ii(d, a, b, c, M[7], 10, 1126891415);
+    c = ii(c, d, a, b, M[14], 15, -1416354905);
+    b = ii(b, c, d, a, M[5], 21, -57434055);
+    a = ii(a, b, c, d, M[12], 6, 1700485571);
+    d = ii(d, a, b, c, M[3], 10, -1894986606);
+    c = ii(c, d, a, b, M[10], 15, -1051523);
+    b = ii(b, c, d, a, M[1], 21, -2054922799);
+    a = ii(a, b, c, d, M[8], 6, 1873313359);
+    d = ii(d, a, b, c, M[15], 10, -30611744);
+    c = ii(c, d, a, b, M[6], 15, -1560198380);
+    b = ii(b, c, d, a, M[13], 21, 1309151649);
+    a = ii(a, b, c, d, M[4], 6, -145523070);
+    d = ii(d, a, b, c, M[11], 10, -1120210379);
+    c = ii(c, d, a, b, M[2], 15, 718787259);
+    b = ii(b, c, d, a, M[9], 21, -343485551);
+
+    a = add32(a, AA);
+    b = add32(b, BB);
+    c = add32(c, CC);
+    d = add32(d, DD);
   }
 
-  function wordToHex(lValue) {
+  let offset = 0;
+  for (; offset + 64 <= len; offset += 64) {
+    for (let j = 0; j < 16; j++) {
+      const idx = offset + j * 4;
+      M[j] =
+        bytes[idx] |
+        (bytes[idx + 1] << 8) |
+        (bytes[idx + 2] << 16) |
+        (bytes[idx + 3] << 24);
+    }
+    processBlock();
+  }
+
+  // Final padding block(s)
+  const tail = new Uint8Array(128);
+  const rem = len - offset;
+  for (let i = 0; i < rem; i++) {
+    tail[i] = bytes[offset + i];
+  }
+  tail[rem] = 0x80;
+
+  const totalBlocks = rem >= 56 ? 2 : 1;
+  const bitLenLow = (len << 3) >>> 0;
+  const bitLenHigh = (len >>> 29) >>> 0;
+  const lenOffset = totalBlocks * 64 - 8;
+  tail[lenOffset] = bitLenLow & 0xff;
+  tail[lenOffset + 1] = (bitLenLow >>> 8) & 0xff;
+  tail[lenOffset + 2] = (bitLenLow >>> 16) & 0xff;
+  tail[lenOffset + 3] = (bitLenLow >>> 24) & 0xff;
+  tail[lenOffset + 4] = bitLenHigh & 0xff;
+  tail[lenOffset + 5] = (bitLenHigh >>> 8) & 0xff;
+  tail[lenOffset + 6] = (bitLenHigh >>> 16) & 0xff;
+  tail[lenOffset + 7] = (bitLenHigh >>> 24) & 0xff;
+
+  for (let bIdx = 0; bIdx < totalBlocks; bIdx++) {
+    for (let j = 0; j < 16; j++) {
+      const idx = bIdx * 64 + j * 4;
+      M[j] =
+        tail[idx] |
+        (tail[idx + 1] << 8) |
+        (tail[idx + 2] << 16) |
+        (tail[idx + 3] << 24);
+    }
+    processBlock();
+  }
+
+  function toHex(n) {
     let s = '';
-    for (let lCount = 0; lCount <= 3; lCount++) {
-      const lByte = (lValue >>> (lCount * 8)) & 255;
-      const temp = '0' + lByte.toString(16);
-      s += temp.substr(temp.length - 2, 2);
+    for (let i = 0; i < 4; i++) {
+      s += ((n >>> (i * 8)) & 0xff).toString(16).padStart(2, '0');
     }
     return s;
   }
-  return (wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d)).toLowerCase();
+  return (toHex(a) + toHex(b) + toHex(c) + toHex(d)).toLowerCase();
 }
 
 function sleep(ms) {
@@ -163,9 +183,11 @@ const DEFAULT_SETTINGS = {
   refreshToken: '',
   remoteFolderName: 'Obsidian_Archive_Vault',
   remoteRootFolderId: '',
-  enableDailyAutoBackup: true,
+  // Disable auto-upload by default on mobile/tablets so tablets don't accidentally push & crash on startup
+  enableDailyAutoBackup: !obsidian.Platform.isMobile,
   dailyBackupTime: '23:00',
-  backupOnStartupIfMissed: true,
+  backupOnStartupIfMissed: !obsidian.Platform.isMobile,
+  maxMobileFileSizeMB: 80,
   includeObsidianConfig: false,
   deleteExtraneousOnPull: false,
   deleteExtraneousOnPush: false,
@@ -215,12 +237,13 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
     this.addSettingTab(new DriveKeeperSettingTab(this.app, this));
 
+    // Only run background auto-push timer on desktop (or if explicitly enabled)
     this.registerInterval(
       window.setInterval(() => this.checkDailySchedule(), 60 * 1000)
     );
 
     window.setTimeout(() => {
-      if (this.settings.enableDailyAutoBackup && this.settings.backupOnStartupIfMissed) {
+      if (!obsidian.Platform.isMobile && this.settings.enableDailyAutoBackup && this.settings.backupOnStartupIfMissed) {
         this.checkDailySchedule(true);
       }
     }, 15000);
@@ -257,6 +280,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
   }
 
   async checkDailySchedule(isStartupCheck = false) {
+    if (obsidian.Platform.isMobile) return; // Never auto-push in background on tablet/phone
     if (!this.settings.enableDailyAutoBackup || !this.isConfigured() || this.isSyncing) {
       return;
     }
@@ -280,9 +304,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     }
   }
 
-  // ==========================================================================
-  // Resilient Request Layer with Exponential Backoff (Handles 403 Rate Limit & 429)
-  // ==========================================================================
   async requestWithRetry(reqOptions, maxRetries = 8) {
     let attempt = 0;
     while (true) {
@@ -518,10 +539,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     return resp.arrayBuffer;
   }
 
-  async tryDesktopRcloneSync() {
-    return false;
-  }
-
   shouldIgnorePath(relPath) {
     const name = relPath.split('/').pop();
     if (name === '.DS_Store' || name === 'Thumbs.db' || name === 'desktop.ini') {
@@ -605,20 +622,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     this.addLog('🚀 [업로드 / Push] 시작...');
 
     try {
-      // Try high-speed resilient rclone engine on Desktop first
-      const handledByRclone = await this.tryDesktopRcloneSync('push', progressCallback);
-      if (handledByRclone) {
-        this.settings.lastBackupDate = this.getTodayDateString();
-        this.settings.lastPushTimestamp = Date.now();
-        this.settings.lastStatusSummary = `최근 업로드: ${new Date().toLocaleString()} (원본 1:1 동기화 완료)`;
-        await this.saveSettings();
-        this.addLog('🎉 구글 드라이브 1:1 무변형 업로드 완료!');
-        this.updateStatusBar('☁️ Drive 백업 완료');
-        new obsidian.Notice('✅ 구글 드라이브에 아카이브 업로드가 완료되었습니다!');
-        return;
-      }
-
-      // Pure REST API engine (Android & fallback)
       const rootFolderId = await this.ensureRemoteRootFolder();
       const [localFiles, remoteTree] = await Promise.all([
         this.listAllLocalFiles(),
@@ -631,26 +634,43 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       let uploadedCount = 0;
       let skippedCount = 0;
       const total = localFiles.length;
+      const mobileMaxBytes = (this.settings.maxMobileFileSizeMB || 80) * 1024 * 1024;
 
       for (let i = 0; i < total; i++) {
         const localFile = localFiles[i];
         const remoteFile = filesByPath.get(localFile.relPath);
 
         if (progressCallback) {
-          progressCallback(i + 1, total, `검사 중: ${localFile.relPath}`);
+          progressCallback(i + 1, total, `검사 중 (${i + 1}/${total}): ${localFile.relPath}`);
         }
 
-        const buffer = await this.app.vault.adapter.readBinary(localFile.relPath);
-        if (remoteFile && remoteFile.size === buffer.byteLength && remoteFile.md5Checksum) {
-          const localMd5 = md5ArrayBuffer(buffer);
-          if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
+        // Fast size check BEFORE reading file into memory!
+        if (remoteFile && remoteFile.size === localFile.size) {
+          // For files >= 15MB, matching exact byte size is sufficient and avoids reading huge files into RAM
+          if (localFile.size >= 15 * 1024 * 1024) {
             skippedCount++;
             continue;
           }
+          if (remoteFile.md5Checksum) {
+            const checkBuf = await this.app.vault.adapter.readBinary(localFile.relPath);
+            const localMd5 = md5ArrayBuffer(checkBuf);
+            if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
+              skippedCount++;
+              continue;
+            }
+          }
+        }
+
+        // Protect mobile WebView from OOM crash on 100MB~500MB textbook PDFs
+        if (obsidian.Platform.isMobile && localFile.size > mobileMaxBytes) {
+          const sizeMB = Math.round(localFile.size / (1024 * 1024));
+          this.addLog(`⚠️ 모바일 메모리 보호 (${sizeMB}MB 건너뜀): ${localFile.relPath}`);
+          skippedCount++;
+          continue;
         }
 
         if (progressCallback) {
-          progressCallback(i + 1, total, `업로드 중: ${localFile.relPath}`);
+          progressCallback(i + 1, total, `업로드 중 (${i + 1}/${total}): ${localFile.relPath}`);
         }
 
         const parentRelPath = localFile.relPath.includes('/')
@@ -658,14 +678,20 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
           : '';
         const parentFolderId = await this.ensureRemoteSubfolder(parentRelPath, foldersByPath);
 
+        let buffer = await this.app.vault.adapter.readBinary(localFile.relPath);
         await this.uploadBinaryFile(
           localFile.relPath,
           buffer,
           parentFolderId,
           remoteFile ? remoteFile.id : null
         );
+        buffer = null; // Release reference immediately for GC
         uploadedCount++;
         this.addLog(`✅ 업로드 완료: ${localFile.relPath}`);
+
+        if (obsidian.Platform.isMobile) {
+          await sleep(60); // Give mobile WebView GC breathing room
+        }
       }
 
       this.settings.lastBackupDate = this.getTodayDateString();
@@ -703,17 +729,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     this.addLog('🚀 [동기화 내려받기 / Pull] 시작...');
 
     try {
-      const handledByRclone = await this.tryDesktopRcloneSync('pull', progressCallback);
-      if (handledByRclone) {
-        this.settings.lastPullTimestamp = Date.now();
-        this.settings.lastStatusSummary = `최근 동기화(Pull): ${new Date().toLocaleString()} (원본 1:1 내려받기 완료)`;
-        await this.saveSettings();
-        this.addLog('🎉 구글 드라이브 1:1 동기화 내려받기 완료!');
-        this.updateStatusBar('☁️ Drive 동기화됨');
-        new obsidian.Notice('✅ 구글 드라이브에서 아카이브 동기화가 완료되었습니다!');
-        return;
-      }
-
       const rootFolderId = await this.ensureRemoteRootFolder();
       const { filesByPath } = await this.buildRemoteTree(rootFolderId);
 
@@ -727,17 +742,22 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       let skippedCount = 0;
       const total = remoteEntries.length;
       const adapter = this.app.vault.adapter;
+      const mobileMaxBytes = (this.settings.maxMobileFileSizeMB || 80) * 1024 * 1024;
 
       for (let i = 0; i < total; i++) {
         const [relPath, remoteFile] = remoteEntries[i];
         if (progressCallback) {
-          progressCallback(i + 1, total, `확인 중: ${relPath}`);
+          progressCallback(i + 1, total, `확인 중 (${i + 1}/${total}): ${relPath}`);
         }
 
-        const existsLocally = await adapter.exists(relPath);
-        if (existsLocally && remoteFile.md5Checksum) {
-          const localBuffer = await adapter.readBinary(relPath);
-          if (localBuffer.byteLength === remoteFile.size) {
+        const localStat = await adapter.stat(relPath);
+        if (localStat && localStat.size === remoteFile.size) {
+          if (remoteFile.size >= 15 * 1024 * 1024) {
+            skippedCount++;
+            continue;
+          }
+          if (remoteFile.md5Checksum) {
+            const localBuffer = await adapter.readBinary(relPath);
             const localMd5 = md5ArrayBuffer(localBuffer);
             if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
               skippedCount++;
@@ -746,15 +766,27 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
           }
         }
 
-        if (progressCallback) {
-          progressCallback(i + 1, total, `다운로드 중: ${relPath}`);
+        if (obsidian.Platform.isMobile && remoteFile.size > mobileMaxBytes) {
+          const sizeMB = Math.round(remoteFile.size / (1024 * 1024));
+          this.addLog(`⚠️ 모바일 메모리 보호 (${sizeMB}MB 대용량 파일 건너뜀): ${relPath}`);
+          skippedCount++;
+          continue;
         }
 
-        const fileBuffer = await this.downloadBinaryFile(remoteFile.id);
+        if (progressCallback) {
+          progressCallback(i + 1, total, `다운로드 중 (${i + 1}/${total}): ${relPath}`);
+        }
+
+        let fileBuffer = await this.downloadBinaryFile(remoteFile.id);
         await this.ensureLocalParentDirs(relPath);
         await adapter.writeBinary(relPath, fileBuffer);
+        fileBuffer = null; // Free memory immediately
         downloadedCount++;
         this.addLog(`📥 내려받기 완료: ${relPath}`);
+
+        if (obsidian.Platform.isMobile) {
+          await sleep(60); // Prevent mobile WebView OOM
+        }
       }
 
       let deletedCount = 0;
@@ -789,6 +821,10 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (obsidian.Platform.isMobile) {
+      // Force disable background auto-push on mobile tablets to prevent startup crashes
+      this.settings.backupOnStartupIfMissed = false;
+    }
   }
 
   async saveSettings() {
@@ -821,7 +857,7 @@ class DriveKeeperModal extends obsidian.Modal {
     this.addStatusRow(
       statusCard,
       '하루 1번 자동 업로드',
-      this.plugin.settings.enableDailyAutoBackup
+      this.plugin.settings.enableDailyAutoBackup && !obsidian.Platform.isMobile
         ? `켜짐 (매일 ${this.plugin.settings.dailyBackupTime})`
         : '꺼짐 (수동 명령만 사용)'
     );
@@ -950,7 +986,20 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
       );
 
     new obsidian.Setting(containerEl)
-      .setName('이 기기에서 하루 1번 자동 업로드 사용')
+      .setName('모바일/태블릿 단일 파일 최대 크기 제한 (MB)')
+      .setDesc('모바일 앱 메모리 초과(튕김) 방지를 위해 이 용량을 넘는 초고용량 PDF(예: 500MB 스캔본)는 태블릿에서 건너뜁니다. (기본: 80MB)')
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.maxMobileFileSizeMB || 80))
+          .onChange(async (value) => {
+            const num = parseInt(value, 10);
+            this.plugin.settings.maxMobileFileSizeMB = isNaN(num) ? 80 : num;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new obsidian.Setting(containerEl)
+      .setName('이 기기에서 하루 1번 자동 업로드 사용 (데스크톱 전용)')
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.enableDailyAutoBackup).onChange(async (value) => {
           this.plugin.settings.enableDailyAutoBackup = value;

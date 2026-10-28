@@ -1,7 +1,7 @@
 {
   "id": "drive-vault-keeper",
   "name": "Drive Vault Keeper",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "minAppVersion": "1.0.0",
   "description": "Mirror and back up your entire vault untouched (1:1 binary preservation) to Google Drive once a day, and restore or sync on demand across macOS, Windows, and Android.",
   "author": "kkh041014",
