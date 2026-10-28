@@ -632,8 +632,8 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
         return true;
       }
     } else {
-      const ownDataPath = `${this.app.vault.configDir}/plugins/obsidian-drive-keeper/data.json`;
-      if (relPath === ownDataPath) return true;
+      const ownDataPath = `${this.app.vault.configDir}/plugins/${this.manifest.id}/data.json`;
+      if (relPath === ownDataPath || relPath.endsWith('drive-keeper/data.json')) return true;
     }
     return false;
   }
