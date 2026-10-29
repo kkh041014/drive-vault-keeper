@@ -2,179 +2,13 @@
 
 const obsidian = require('obsidian');
 
-// ============================================================================
-// Zero-Allocation Streaming MD5 (Uses only a fixed 64-byte scratch buffer!)
-// Prevents Out-Of-Memory (OOM) crashes on Android / iPad tablets.
-// ============================================================================
-function md5ArrayBuffer(buffer) {
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.length;
-
-  function add32(a, b) {
-    return (a + b) | 0;
-  }
-  function rol(x, c) {
-    return (x << c) | (x >>> (32 - c));
-  }
-  function cmn(q, a, b, x, s, t) {
-    a = add32(add32(a, q), add32(x, t));
-    return add32(rol(a, s), b);
-  }
-  function ff(a, b, c, d, x, s, t) {
-    return cmn((b & c) | (~b & d), a, b, x, s, t);
-  }
-  function gg(a, b, c, d, x, s, t) {
-    return cmn((b & d) | (c & ~d), a, b, x, s, t);
-  }
-  function hh(a, b, c, d, x, s, t) {
-    return cmn(b ^ c ^ d, a, b, x, s, t);
-  }
-  function ii(a, b, c, d, x, s, t) {
-    return cmn(c ^ (b | ~d), a, b, x, s, t);
-  }
-
-  let a = 0x67452301;
-  let b = 0xefcdab89;
-  let c = 0x98badcfe;
-  let d = 0x10325476;
-
-  // Fixed 16-word (64-byte) block — zero heap growth regardless of file size
-  const M = new Int32Array(16);
-
-  function processBlock() {
-    const AA = a, BB = b, CC = c, DD = d;
-    a = ff(a, b, c, d, M[0], 7, -680876936);
-    d = ff(d, a, b, c, M[1], 12, -389564586);
-    c = ff(c, d, a, b, M[2], 17, 606105819);
-    b = ff(b, c, d, a, M[3], 22, -1044525330);
-    a = ff(a, b, c, d, M[4], 7, -176418897);
-    d = ff(d, a, b, c, M[5], 12, 1200080426);
-    c = ff(c, d, a, b, M[6], 17, -1473231341);
-    b = ff(b, c, d, a, M[7], 22, -45705983);
-    a = ff(a, b, c, d, M[8], 7, 1770035416);
-    d = ff(d, a, b, c, M[9], 12, -1958414417);
-    c = ff(c, d, a, b, M[10], 17, -42063);
-    b = ff(b, c, d, a, M[11], 22, -1990404162);
-    a = ff(a, b, c, d, M[12], 7, 1804603682);
-    d = ff(d, a, b, c, M[13], 12, -40341101);
-    c = ff(c, d, a, b, M[14], 17, -1502002290);
-    b = ff(b, c, d, a, M[15], 22, 1236535329);
-
-    a = gg(a, b, c, d, M[1], 5, -165796510);
-    d = gg(d, a, b, c, M[6], 9, -1069501632);
-    c = gg(c, d, a, b, M[11], 14, 643717713);
-    b = gg(b, c, d, a, M[0], 20, -373897302);
-    a = gg(a, b, c, d, M[5], 5, -701558691);
-    d = gg(d, a, b, c, M[10], 9, 38016083);
-    c = gg(c, d, a, b, M[15], 14, -660478335);
-    b = gg(b, c, d, a, M[4], 20, -405537848);
-    a = gg(a, b, c, d, M[9], 5, 568446438);
-    d = gg(d, a, b, c, M[14], 9, -1019803690);
-    c = gg(c, d, a, b, M[3], 14, -187363961);
-    b = gg(b, c, d, a, M[8], 20, 1163531501);
-    a = gg(a, b, c, d, M[13], 5, -1444681467);
-    d = gg(d, a, b, c, M[2], 9, -51403784);
-    c = gg(c, d, a, b, M[7], 14, 1735328473);
-    b = gg(b, c, d, a, M[12], 20, -1926607734);
-
-    a = hh(a, b, c, d, M[5], 4, -378558);
-    d = hh(d, a, b, c, M[8], 11, -2022574463);
-    c = hh(c, d, a, b, M[11], 16, 1839030562);
-    b = hh(b, c, d, a, M[14], 23, -35309556);
-    a = hh(a, b, c, d, M[1], 4, -1530992060);
-    d = hh(d, a, b, c, M[4], 11, 1272893353);
-    c = hh(c, d, a, b, M[7], 16, -155497632);
-    b = hh(b, c, d, a, M[10], 23, -1094730640);
-    a = hh(a, b, c, d, M[13], 4, 681279174);
-    d = hh(d, a, b, c, M[0], 11, -358537222);
-    c = hh(c, d, a, b, M[3], 16, -722521979);
-    b = hh(b, c, d, a, M[6], 23, 76029189);
-    a = hh(a, b, c, d, M[9], 4, -640364487);
-    d = hh(d, a, b, c, M[12], 11, -421815835);
-    c = hh(c, d, a, b, M[15], 16, 530742520);
-    b = hh(b, c, d, a, M[2], 23, -995338651);
-
-    a = ii(a, b, c, d, M[0], 6, -198630844);
-    d = ii(d, a, b, c, M[7], 10, 1126891415);
-    c = ii(c, d, a, b, M[14], 15, -1416354905);
-    b = ii(b, c, d, a, M[5], 21, -57434055);
-    a = ii(a, b, c, d, M[12], 6, 1700485571);
-    d = ii(d, a, b, c, M[3], 10, -1894986606);
-    c = ii(c, d, a, b, M[10], 15, -1051523);
-    b = ii(b, c, d, a, M[1], 21, -2054922799);
-    a = ii(a, b, c, d, M[8], 6, 1873313359);
-    d = ii(d, a, b, c, M[15], 10, -30611744);
-    c = ii(c, d, a, b, M[6], 15, -1560198380);
-    b = ii(b, c, d, a, M[13], 21, 1309151649);
-    a = ii(a, b, c, d, M[4], 6, -145523070);
-    d = ii(d, a, b, c, M[11], 10, -1120210379);
-    c = ii(c, d, a, b, M[2], 15, 718787259);
-    b = ii(b, c, d, a, M[9], 21, -343485551);
-
-    a = add32(a, AA);
-    b = add32(b, BB);
-    c = add32(c, CC);
-    d = add32(d, DD);
-  }
-
-  let offset = 0;
-  for (; offset + 64 <= len; offset += 64) {
-    for (let j = 0; j < 16; j++) {
-      const idx = offset + j * 4;
-      M[j] =
-        bytes[idx] |
-        (bytes[idx + 1] << 8) |
-        (bytes[idx + 2] << 16) |
-        (bytes[idx + 3] << 24);
-    }
-    processBlock();
-  }
-
-  // Final padding block(s)
-  const tail = new Uint8Array(128);
-  const rem = len - offset;
-  for (let i = 0; i < rem; i++) {
-    tail[i] = bytes[offset + i];
-  }
-  tail[rem] = 0x80;
-
-  const totalBlocks = rem >= 56 ? 2 : 1;
-  const bitLenLow = (len << 3) >>> 0;
-  const bitLenHigh = (len >>> 29) >>> 0;
-  const lenOffset = totalBlocks * 64 - 8;
-  tail[lenOffset] = bitLenLow & 0xff;
-  tail[lenOffset + 1] = (bitLenLow >>> 8) & 0xff;
-  tail[lenOffset + 2] = (bitLenLow >>> 16) & 0xff;
-  tail[lenOffset + 3] = (bitLenLow >>> 24) & 0xff;
-  tail[lenOffset + 4] = bitLenHigh & 0xff;
-  tail[lenOffset + 5] = (bitLenHigh >>> 8) & 0xff;
-  tail[lenOffset + 6] = (bitLenHigh >>> 16) & 0xff;
-  tail[lenOffset + 7] = (bitLenHigh >>> 24) & 0xff;
-
-  for (let bIdx = 0; bIdx < totalBlocks; bIdx++) {
-    for (let j = 0; j < 16; j++) {
-      const idx = bIdx * 64 + j * 4;
-      M[j] =
-        tail[idx] |
-        (tail[idx + 1] << 8) |
-        (tail[idx + 2] << 16) |
-        (tail[idx + 3] << 24);
-    }
-    processBlock();
-  }
-
-  function toHex(n) {
-    let s = '';
-    for (let i = 0; i < 4; i++) {
-      s += ((n >>> (i * 8)) & 0xff).toString(16).padStart(2, '0');
-    }
-    return s;
-  }
-  return (toHex(a) + toHex(b) + toHex(c) + toHex(d)).toLowerCase();
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Normalize Korean/Unicode paths to NFC so macOS (NFD) and Android/Windows (NFC) match 100%
+function normPath(p) {
+  return (p || '').normalize('NFC');
 }
 
 const DEFAULT_SETTINGS = {
@@ -183,11 +17,10 @@ const DEFAULT_SETTINGS = {
   refreshToken: '',
   remoteFolderName: 'Obsidian_Archive_Vault',
   remoteRootFolderId: '',
-  // Disable auto-upload by default on mobile/tablets so tablets don't accidentally push & crash on startup
   enableDailyAutoBackup: !obsidian.Platform.isMobile,
   dailyBackupTime: '23:00',
   backupOnStartupIfMissed: !obsidian.Platform.isMobile,
-  maxMobileFileSizeMB: 80,
+  maxMobileFileSizeMB: 25,
   includeObsidianConfig: false,
   deleteExtraneousOnPull: false,
   deleteExtraneousOnPush: false,
@@ -237,7 +70,6 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
 
     this.addSettingTab(new DriveKeeperSettingTab(this.app, this));
 
-    // Only run background auto-push timer on desktop (or if explicitly enabled)
     this.registerInterval(
       window.setInterval(() => this.checkDailySchedule(), 60 * 1000)
     );
@@ -259,7 +91,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     const timeStr = new Date().toLocaleTimeString();
     const line = `[${timeStr}] ${msg}`;
     this.logs.unshift(line);
-    if (this.logs.length > 100) this.logs.pop();
+    if (this.logs.length > 80) this.logs.pop();
     if (this.onLogUpdate) this.onLogUpdate(this.logs);
   }
 
@@ -280,7 +112,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
   }
 
   async checkDailySchedule(isStartupCheck = false) {
-    if (obsidian.Platform.isMobile) return; // Never auto-push in background on tablet/phone
+    if (obsidian.Platform.isMobile) return;
     if (!this.settings.enableDailyAutoBackup || !this.isConfigured() || this.isSyncing) {
       return;
     }
@@ -304,20 +136,32 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     }
   }
 
-  async requestWithRetry(reqOptions, maxRetries = 8) {
+  // ==========================================================================
+  // Native Fetch Layer with Exponential Backoff
+  // Using native fetch instead of obsidian.requestUrl avoids Capacitor bridge
+  // Base64 serialization overhead that causes mobile WebView OOM crashes!
+  // ==========================================================================
+  async fetchWithRetry(url, options = {}, maxRetries = 8) {
     let attempt = 0;
     while (true) {
-      const resp = await obsidian.requestUrl(Object.assign({ throw: false }, reqOptions));
-      if (resp.status >= 200 && resp.status < 300) {
+      try {
+        const resp = await window.fetch(url, options);
+        if (resp.ok) return resp;
+        if ((resp.status === 403 || resp.status === 429 || resp.status >= 500) && attempt < maxRetries) {
+          attempt++;
+          const waitMs = Math.min(12000, 900 * Math.pow(1.7, attempt) + Math.floor(Math.random() * 500));
+          await sleep(waitMs);
+          continue;
+        }
         return resp;
+      } catch (netErr) {
+        if (attempt < maxRetries) {
+          attempt++;
+          await sleep(1500 * attempt);
+          continue;
+        }
+        throw netErr;
       }
-      if ((resp.status === 403 || resp.status === 429 || resp.status >= 500) && attempt < maxRetries) {
-        attempt++;
-        const waitMs = Math.min(12000, 800 * Math.pow(1.7, attempt) + Math.floor(Math.random() * 500));
-        await sleep(waitMs);
-        continue;
-      }
-      return resp;
     }
   }
 
@@ -336,61 +180,68 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       grant_type: 'refresh_token'
     }).toString();
 
-    const resp = await this.requestWithRetry({
-      url: 'https://oauth2.googleapis.com/token',
+    const resp = await this.fetchWithRetry('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     });
 
-    if (resp.status !== 200 || !resp.json || !resp.json.access_token) {
-      throw new Error(`Google 액세스 토큰 갱신 실패: HTTP ${resp.status} ${resp.text}`);
+    const data = await resp.json();
+    if (!resp.ok || !data || !data.access_token) {
+      throw new Error(`Google 액세스 토큰 갱신 실패: HTTP ${resp.status}`);
     }
 
-    this.accessToken = resp.json.access_token;
-    this.accessTokenExpiry = Date.now() + (resp.json.expires_in || 3600) * 1000;
+    this.accessToken = data.access_token;
+    this.accessTokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
     return this.accessToken;
   }
 
-  async driveRequest(url, options = {}) {
+  async driveJsonRequest(url, options = {}) {
     const token = await this.getValidAccessToken();
     const headers = Object.assign({}, options.headers || {}, {
       Authorization: `Bearer ${token}`
     });
-    const resp = await this.requestWithRetry(Object.assign({}, options, { url, headers }));
-    if (resp.status < 200 || resp.status >= 300) {
-      throw new Error(`Drive API 오류 (HTTP ${resp.status}): ${resp.text ? resp.text.slice(0, 200) : ''}`);
+    const resp = await this.fetchWithRetry(url, Object.assign({}, options, { headers }));
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`Drive API 오류 (HTTP ${resp.status}): ${errText.slice(0, 180)}`);
     }
-    return resp;
+    return resp.json();
   }
 
   async ensureRemoteRootFolder() {
     if (this.settings.remoteRootFolderId) {
-      const token = await this.getValidAccessToken();
-      const checkResp = await this.requestWithRetry({
-        url: `https://www.googleapis.com/drive/v3/files/${this.settings.remoteRootFolderId}?fields=id,name,trashed`,
-        headers: { Authorization: `Bearer ${token}` }
-      }, 3);
-      if (checkResp.status === 200 && checkResp.json && !checkResp.json.trashed) {
-        return this.settings.remoteRootFolderId;
-      }
+      try {
+        const token = await this.getValidAccessToken();
+        const checkResp = await this.fetchWithRetry(
+          `https://www.googleapis.com/drive/v3/files/${this.settings.remoteRootFolderId}?fields=id,name,trashed`,
+          { headers: { Authorization: `Bearer ${token}` } },
+          3
+        );
+        if (checkResp.ok) {
+          const meta = await checkResp.json();
+          if (meta && !meta.trashed) {
+            return this.settings.remoteRootFolderId;
+          }
+        }
+      } catch {}
     }
 
     const folderName = (this.settings.remoteFolderName || 'Obsidian_Archive_Vault').replace(/'/g, "\\'");
     const q = encodeURIComponent(
       `name = '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false`
     );
-    const searchResp = await this.driveRequest(
+    const searchData = await this.driveJsonRequest(
       `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&spaces=drive`
     );
 
-    if (searchResp.json.files && searchResp.json.files.length > 0) {
-      this.settings.remoteRootFolderId = searchResp.json.files[0].id;
+    if (searchData.files && searchData.files.length > 0) {
+      this.settings.remoteRootFolderId = searchData.files[0].id;
       await this.saveSettings();
       return this.settings.remoteRootFolderId;
     }
 
-    const createResp = await this.driveRequest('https://www.googleapis.com/drive/v3/files?fields=id', {
+    const createData = await this.driveJsonRequest('https://www.googleapis.com/drive/v3/files?fields=id', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -400,7 +251,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       })
     });
 
-    this.settings.remoteRootFolderId = createResp.json.id;
+    this.settings.remoteRootFolderId = createData.id;
     await this.saveSettings();
     return this.settings.remoteRootFolderId;
   }
@@ -417,26 +268,26 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       let pageToken = '';
       do {
         const q = encodeURIComponent(`'${currentFolder.id}' in parents and trashed = false`);
-        const url = `https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,mimeType,md5Checksum,size,modifiedTime)&pageToken=${pageToken}`;
-        const resp = await this.driveRequest(url);
-        const files = (resp.json && resp.json.files) || [];
+        const url = `https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime)&pageToken=${pageToken}`;
+        const data = await this.driveJsonRequest(url);
+        const files = (data && data.files) || [];
         for (const item of files) {
-          const relPath = currentFolder.pathPrefix ? `${currentFolder.pathPrefix}/${item.name}` : item.name;
+          const cleanName = normPath(item.name);
+          const relPath = normPath(currentFolder.pathPrefix ? `${currentFolder.pathPrefix}/${cleanName}` : cleanName);
           if (item.mimeType === 'application/vnd.google-apps.folder') {
             foldersByPath.set(relPath, item.id);
             queue.push({ id: item.id, pathPrefix: relPath });
           } else {
             filesByPath.set(relPath, {
               id: item.id,
-              name: item.name,
-              md5Checksum: item.md5Checksum || '',
+              name: cleanName,
               size: Number(item.size || 0),
-              modifiedTime: item.modifiedTime,
+              modifiedTime: item.modifiedTime ? new Date(item.modifiedTime).getTime() : 0,
               parentId: currentFolder.id
             });
           }
         }
-        pageToken = (resp.json && resp.json.nextPageToken) || '';
+        pageToken = (data && data.nextPageToken) || '';
       } while (pageToken);
     }
 
@@ -444,10 +295,11 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
   }
 
   async ensureRemoteSubfolder(relFolderPath, foldersByPath) {
-    if (!relFolderPath) return foldersByPath.get('');
-    if (foldersByPath.has(relFolderPath)) return foldersByPath.get(relFolderPath);
+    const normFolder = normPath(relFolderPath);
+    if (!normFolder) return foldersByPath.get('');
+    if (foldersByPath.has(normFolder)) return foldersByPath.get(normFolder);
 
-    const parts = relFolderPath.split('/');
+    const parts = normFolder.split('/');
     let currentPath = '';
     let parentId = foldersByPath.get('');
 
@@ -456,7 +308,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       if (foldersByPath.has(currentPath)) {
         parentId = foldersByPath.get(currentPath);
       } else {
-        const createResp = await this.driveRequest('https://www.googleapis.com/drive/v3/files?fields=id', {
+        const created = await this.driveJsonRequest('https://www.googleapis.com/drive/v3/files?fields=id', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -465,15 +317,16 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
             parents: [parentId]
           })
         });
-        parentId = createResp.json.id;
+        parentId = created.id;
         foldersByPath.set(currentPath, parentId);
       }
     }
     return parentId;
   }
 
+  // Upload binary file using native window.fetch (bypasses Capacitor bridge crash!)
   async uploadBinaryFile(relPath, arrayBuffer, parentFolderId, existingFileId = null) {
-    const fileName = relPath.split('/').pop();
+    const fileName = normPath(relPath.split('/').pop());
     const metadata = existingFileId
       ? { name: fileName }
       : { name: fileName, parents: [parentFolderId] };
@@ -485,8 +338,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     const initMethod = existingFileId ? 'PATCH' : 'POST';
     const token = await this.getValidAccessToken();
 
-    const initResp = await this.requestWithRetry({
-      url: initUrl,
+    const initResp = await this.fetchWithRetry(initUrl, {
       method: initMethod,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -497,64 +349,64 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       body: JSON.stringify(metadata)
     });
 
-    if (initResp.status < 200 || initResp.status >= 300) {
-      throw new Error(`업로드 초기화 실패 (${relPath}): HTTP ${initResp.status} ${initResp.text}`);
+    if (!initResp.ok) {
+      const errTxt = await initResp.text().catch(() => '');
+      throw new Error(`업로드 세션 생성 실패 (${relPath}): HTTP ${initResp.status} ${errTxt.slice(0, 120)}`);
     }
 
-    const uploadLocation =
-      initResp.headers['location'] ||
-      initResp.headers['Location'] ||
-      Object.entries(initResp.headers || {}).find(([k]) => k.toLowerCase() === 'location')?.[1];
-
+    const uploadLocation = initResp.headers.get('location');
     if (!uploadLocation) {
       throw new Error(`Resumable 업로드 URL 수신 실패: ${relPath}`);
     }
 
-    const putResp = await this.requestWithRetry({
-      url: uploadLocation,
+    const putResp = await this.fetchWithRetry(uploadLocation, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/octet-stream'
       },
-      body: arrayBuffer
+      body: new Blob([arrayBuffer])
     });
 
-    if (putResp.status !== 200 && putResp.status !== 201) {
+    if (!putResp.ok) {
       throw new Error(`파일 업로드 실패 (${relPath}): HTTP ${putResp.status}`);
     }
   }
 
+  // Download binary file using native window.fetch (bypasses Capacitor bridge crash!)
   async downloadBinaryFile(fileId) {
     const token = await this.getValidAccessToken();
-    const resp = await this.requestWithRetry({
-      url: `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`
+    const resp = await this.fetchWithRetry(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
       }
-    });
-    if (resp.status < 200 || resp.status >= 300) {
+    );
+    if (!resp.ok) {
       throw new Error(`파일 다운로드 실패 (${fileId}): HTTP ${resp.status}`);
     }
-    return resp.arrayBuffer;
+    return resp.arrayBuffer();
   }
 
   shouldIgnorePath(relPath) {
-    const name = relPath.split('/').pop();
+    const norm = normPath(relPath);
+    const name = norm.split('/').pop();
     if (name === '.DS_Store' || name === 'Thumbs.db' || name === 'desktop.ini') {
       return true;
     }
-    if (relPath.startsWith('.git/') || relPath === '.git') {
+    if (norm.startsWith('.git/') || norm === '.git') {
       return true;
     }
     if (!this.settings.includeObsidianConfig) {
       const configDir = this.app.vault.configDir || '.obsidian';
-      if (relPath === configDir || relPath.startsWith(`${configDir}/`)) {
+      if (norm === configDir || norm.startsWith(`${configDir}/`)) {
         return true;
       }
     } else {
       const ownDataPath = `${this.app.vault.configDir}/plugins/${this.manifest.id}/data.json`;
-      if (relPath === ownDataPath || relPath.endsWith('drive-keeper/data.json')) return true;
+      if (norm === ownDataPath || norm.endsWith('drive-keeper/data.json')) return true;
     }
     return false;
   }
@@ -578,7 +430,8 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
         if (!this.shouldIgnorePath(file)) {
           const stat = await adapter.stat(file);
           allFiles.push({
-            relPath: file,
+            rawPath: file,              // exact path on current OS filesystem (NFD on Mac, NFC on Android)
+            normRelPath: normPath(file), // normalized NFC key for cross-platform comparison
             size: stat ? stat.size : 0,
             mtime: stat ? stat.mtime : 0
           });
@@ -604,6 +457,11 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     }
   }
 
+  // ==========================================================================
+  // Zero-Memory Comparison Push & Pull
+  // Never calls adapter.readBinary() just to compare files!
+  // Matches by NFC normalized path + exact byte size (and mtime for edited notes).
+  // ==========================================================================
   async runPushBackup(isSilentAuto = false, progressCallback = null) {
     if (this.isSyncing) {
       new obsidian.Notice('이미 동기화 작업이 진행 중입니다.');
@@ -619,7 +477,7 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     if (!isSilentAuto) {
       new obsidian.Notice('☁️ 구글 드라이브에 아카이브 업로드를 시작합니다...');
     }
-    this.addLog('🚀 [업로드 / Push] 시작...');
+    this.addLog('🚀 [업로드 / Push] 파일 목록 비교 중...');
 
     try {
       const rootFolderId = await this.ensureRemoteRootFolder();
@@ -629,77 +487,68 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
       ]);
 
       const { foldersByPath, filesByPath } = remoteTree;
-      this.addLog(`📂 스캔 완료: 로컬 파일 ${localFiles.length}개 / 구글 드라이브 파일 ${filesByPath.size}개`);
+      this.addLog(`📂 스캔 완료: 로컬 ${localFiles.length}개 / 구글 드라이브 ${filesByPath.size}개`);
 
       let uploadedCount = 0;
       let skippedCount = 0;
       const total = localFiles.length;
-      const mobileMaxBytes = (this.settings.maxMobileFileSizeMB || 80) * 1024 * 1024;
+      const mobileMaxBytes = (this.settings.maxMobileFileSizeMB || 25) * 1024 * 1024;
 
       for (let i = 0; i < total; i++) {
         const localFile = localFiles[i];
-        const remoteFile = filesByPath.get(localFile.relPath);
+        const remoteFile = filesByPath.get(localFile.normRelPath);
 
-        if (progressCallback) {
-          progressCallback(i + 1, total, `검사 중 (${i + 1}/${total}): ${localFile.relPath}`);
-        }
-
-        // Fast size check BEFORE reading file into memory!
+        // Zero-RAM comparison: if file exists on Drive with identical byte size
+        // (and for small markdown notes, hasn't been modified after remote upload), skip without reading!
         if (remoteFile && remoteFile.size === localFile.size) {
-          // For files >= 15MB, matching exact byte size is sufficient and avoids reading huge files into RAM
-          if (localFile.size >= 15 * 1024 * 1024) {
+          const isSmallText = localFile.size < 256 * 1024 && localFile.normRelPath.endsWith('.md');
+          if (!isSmallText || localFile.mtime <= remoteFile.modifiedTime + 5000) {
             skippedCount++;
+            if (i % 40 === 0 && progressCallback) {
+              progressCallback(i + 1, total, `비교 건너뜀 (${i + 1}/${total}): ${localFile.normRelPath}`);
+            }
             continue;
           }
-          if (remoteFile.md5Checksum) {
-            const checkBuf = await this.app.vault.adapter.readBinary(localFile.relPath);
-            const localMd5 = md5ArrayBuffer(checkBuf);
-            if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
-              skippedCount++;
-              continue;
-            }
-          }
         }
 
-        // Protect mobile WebView from OOM crash on 100MB~500MB textbook PDFs
         if (obsidian.Platform.isMobile && localFile.size > mobileMaxBytes) {
           const sizeMB = Math.round(localFile.size / (1024 * 1024));
-          this.addLog(`⚠️ 모바일 메모리 보호 (${sizeMB}MB 건너뜀): ${localFile.relPath}`);
+          this.addLog(`⚠️ 태블릿 메모리 보호 (${sizeMB}MB 대용량 건너뜀): ${localFile.normRelPath}`);
           skippedCount++;
           continue;
         }
 
         if (progressCallback) {
-          progressCallback(i + 1, total, `업로드 중 (${i + 1}/${total}): ${localFile.relPath}`);
+          progressCallback(i + 1, total, `업로드 중 (${i + 1}/${total}): ${localFile.normRelPath}`);
         }
 
-        const parentRelPath = localFile.relPath.includes('/')
-          ? localFile.relPath.substring(0, localFile.relPath.lastIndexOf('/'))
+        const parentRelPath = localFile.normRelPath.includes('/')
+          ? localFile.normRelPath.substring(0, localFile.normRelPath.lastIndexOf('/'))
           : '';
         const parentFolderId = await this.ensureRemoteSubfolder(parentRelPath, foldersByPath);
 
-        let buffer = await this.app.vault.adapter.readBinary(localFile.relPath);
+        let buffer = await this.app.vault.adapter.readBinary(localFile.rawPath);
         await this.uploadBinaryFile(
-          localFile.relPath,
+          localFile.normRelPath,
           buffer,
           parentFolderId,
           remoteFile ? remoteFile.id : null
         );
-        buffer = null; // Release reference immediately for GC
+        buffer = null;
         uploadedCount++;
-        this.addLog(`✅ 업로드 완료: ${localFile.relPath}`);
+        this.addLog(`✅ 업로드 완료: ${localFile.normRelPath}`);
 
         if (obsidian.Platform.isMobile) {
-          await sleep(60); // Give mobile WebView GC breathing room
+          await sleep(120);
         }
       }
 
       this.settings.lastBackupDate = this.getTodayDateString();
       this.settings.lastPushTimestamp = Date.now();
-      this.settings.lastStatusSummary = `최근 업로드: ${new Date().toLocaleString()} (업로드 ${uploadedCount}개, 유지 ${skippedCount}개)`;
+      this.settings.lastStatusSummary = `최근 업로드: ${new Date().toLocaleString()} (업로드 ${uploadedCount}개, 동일 유지 ${skippedCount}개)`;
       await this.saveSettings();
 
-      this.addLog(`🎉 업로드 완료! (새로 올림: ${uploadedCount}개, 변경 없음: ${skippedCount}개)`);
+      this.addLog(`🎉 업로드 완료! (새로 올림: ${uploadedCount}개, 동일 파일 유지: ${skippedCount}개)`);
       this.updateStatusBar('☁️ Drive 백업 완료');
       new obsidian.Notice(`✅ 구글 드라이브 업로드 완료! (업로드 ${uploadedCount}개 / 유지 ${skippedCount}개)`);
     } catch (err) {
@@ -726,83 +575,83 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
     this.isSyncing = true;
     this.updateStatusBar('📥 Drive 동기화 중...');
     new obsidian.Notice('📥 구글 드라이브에서 아카이브 동기화(내려받기)를 시작합니다...');
-    this.addLog('🚀 [동기화 내려받기 / Pull] 시작...');
+    this.addLog('🚀 [동기화 내려받기 / Pull] 파일 목록 비교 중...');
 
     try {
       const rootFolderId = await this.ensureRemoteRootFolder();
-      const { filesByPath } = await this.buildRemoteTree(rootFolderId);
+      const [localFiles, remoteTree] = await Promise.all([
+        this.listAllLocalFiles(),
+        this.buildRemoteTree(rootFolderId)
+      ]);
+
+      const { filesByPath } = remoteTree;
+      const localByNormPath = new Map();
+      for (const lf of localFiles) {
+        localByNormPath.set(lf.normRelPath, lf);
+      }
 
       const remoteEntries = Array.from(filesByPath.entries()).filter(
         ([relPath]) => !this.shouldIgnorePath(relPath)
       );
 
-      this.addLog(`📂 원격 아카이브 파일 ${remoteEntries.length}개 확인됨. 비교 및 다운로드 시작...`);
+      this.addLog(`📂 원격 파일 ${remoteEntries.length}개 / 로컬 파일 ${localFiles.length}개 비교 시작...`);
 
       let downloadedCount = 0;
       let skippedCount = 0;
       const total = remoteEntries.length;
       const adapter = this.app.vault.adapter;
-      const mobileMaxBytes = (this.settings.maxMobileFileSizeMB || 80) * 1024 * 1024;
+      const mobileMaxBytes = (this.settings.maxMobileFileSizeMB || 25) * 1024 * 1024;
 
       for (let i = 0; i < total; i++) {
-        const [relPath, remoteFile] = remoteEntries[i];
-        if (progressCallback) {
-          progressCallback(i + 1, total, `확인 중 (${i + 1}/${total}): ${relPath}`);
-        }
+        const [normRelPath, remoteFile] = remoteEntries[i];
+        const existingLocal = localByNormPath.get(normRelPath);
 
-        const localStat = await adapter.stat(relPath);
-        if (localStat && localStat.size === remoteFile.size) {
-          if (remoteFile.size >= 15 * 1024 * 1024) {
-            skippedCount++;
-            continue;
+        // Zero-RAM check: if local file already exists with identical byte size, skip immediately!
+        if (existingLocal && existingLocal.size === remoteFile.size) {
+          skippedCount++;
+          if (i % 40 === 0 && progressCallback) {
+            progressCallback(i + 1, total, `동일 파일 유지 (${i + 1}/${total}): ${normRelPath}`);
           }
-          if (remoteFile.md5Checksum) {
-            const localBuffer = await adapter.readBinary(relPath);
-            const localMd5 = md5ArrayBuffer(localBuffer);
-            if (localMd5 === remoteFile.md5Checksum.toLowerCase()) {
-              skippedCount++;
-              continue;
-            }
-          }
+          continue;
         }
 
         if (obsidian.Platform.isMobile && remoteFile.size > mobileMaxBytes) {
           const sizeMB = Math.round(remoteFile.size / (1024 * 1024));
-          this.addLog(`⚠️ 모바일 메모리 보호 (${sizeMB}MB 대용량 파일 건너뜀): ${relPath}`);
+          this.addLog(`⚠️ 태블릿 메모리 보호 (${sizeMB}MB 대용량 파일 건너뜀): ${normRelPath}`);
           skippedCount++;
           continue;
         }
 
         if (progressCallback) {
-          progressCallback(i + 1, total, `다운로드 중 (${i + 1}/${total}): ${relPath}`);
+          progressCallback(i + 1, total, `다운로드 중 (${i + 1}/${total}): ${normRelPath}`);
         }
 
+        const targetWritePath = existingLocal ? existingLocal.rawPath : normRelPath;
         let fileBuffer = await this.downloadBinaryFile(remoteFile.id);
-        await this.ensureLocalParentDirs(relPath);
-        await adapter.writeBinary(relPath, fileBuffer);
-        fileBuffer = null; // Free memory immediately
+        await this.ensureLocalParentDirs(targetWritePath);
+        await adapter.writeBinary(targetWritePath, fileBuffer);
+        fileBuffer = null;
         downloadedCount++;
-        this.addLog(`📥 내려받기 완료: ${relPath}`);
+        this.addLog(`📥 내려받기 완료: ${normRelPath}`);
 
         if (obsidian.Platform.isMobile) {
-          await sleep(60); // Prevent mobile WebView OOM
+          await sleep(120);
         }
       }
 
       let deletedCount = 0;
       if (this.settings.deleteExtraneousOnPull) {
-        const localFiles = await this.listAllLocalFiles();
         for (const lf of localFiles) {
-          if (!filesByPath.has(lf.relPath)) {
-            await adapter.remove(lf.relPath);
+          if (!filesByPath.has(lf.normRelPath)) {
+            await adapter.remove(lf.rawPath);
             deletedCount++;
-            this.addLog(`🗑️ 원격에 없는 로컬 파일 정리: ${lf.relPath}`);
+            this.addLog(`🗑️ 원격에 없는 로컬 파일 정리: ${lf.normRelPath}`);
           }
         }
       }
 
       this.settings.lastPullTimestamp = Date.now();
-      this.settings.lastStatusSummary = `최근 동기화(Pull): ${new Date().toLocaleString()} (다운로드 ${downloadedCount}개, 유지 ${skippedCount}개)`;
+      this.settings.lastStatusSummary = `최근 동기화(Pull): ${new Date().toLocaleString()} (다운로드 ${downloadedCount}개, 동일 유지 ${skippedCount}개)`;
       await this.saveSettings();
 
       this.addLog(`🎉 동기화 완료! (내려받음: ${downloadedCount}개, 변경 없음: ${skippedCount}개, 삭제: ${deletedCount}개)`);
@@ -822,8 +671,11 @@ class ObsidianDriveKeeperPlugin extends obsidian.Plugin {
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     if (obsidian.Platform.isMobile) {
-      // Force disable background auto-push on mobile tablets to prevent startup crashes
       this.settings.backupOnStartupIfMissed = false;
+      this.settings.enableDailyAutoBackup = false;
+      if (!this.settings.maxMobileFileSizeMB || this.settings.maxMobileFileSizeMB > 30) {
+        this.settings.maxMobileFileSizeMB = 25;
+      }
     }
   }
 
@@ -844,7 +696,7 @@ class DriveKeeperModal extends obsidian.Modal {
     contentEl.addClass('odk-modal-container');
 
     const header = contentEl.createDiv({ cls: 'odk-hero-header' });
-    header.createDiv({ cls: 'odk-hero-title', text: '☁️ Drive Vault Keeper' });
+    header.createDiv({ cls: 'odk-hero-title', text: '☁️ Drive Vault Keeper (v1.0.3)' });
 
     const connected = this.plugin.isConfigured();
     header.createSpan({
@@ -859,7 +711,7 @@ class DriveKeeperModal extends obsidian.Modal {
       '하루 1번 자동 업로드',
       this.plugin.settings.enableDailyAutoBackup && !obsidian.Platform.isMobile
         ? `켜짐 (매일 ${this.plugin.settings.dailyBackupTime})`
-        : '꺼짐 (수동 명령만 사용)'
+        : '꺼짐 (수동 명령 전용)'
     );
     this.addStatusRow(statusCard, '오늘 자동 백업 여부', this.plugin.settings.lastBackupDate || '기록 없음');
     this.addStatusRow(statusCard, '최근 작업 요약', this.plugin.settings.lastStatusSummary);
@@ -882,25 +734,25 @@ class DriveKeeperModal extends obsidian.Modal {
 
     const grid = contentEl.createDiv({ cls: 'odk-action-grid' });
 
-    const pushBtn = grid.createEl('button', { cls: 'odk-action-btn odk-primary' });
-    pushBtn.createDiv({ cls: 'odk-btn-title', text: '☁️ 지금 구글 드라이브에 모셔두기 (Push)' });
-    pushBtn.createDiv({
-      cls: 'odk-btn-desc',
-      text: '이 기기의 모든 아카이브 파일을 변형 없이 그대로 구글 드라이브에 업로드합니다.'
-    });
-    pushBtn.addEventListener('click', async () => {
-      await this.plugin.runPushBackup(false, updateProgress);
-      this.onOpen();
-    });
-
-    const pullBtn = grid.createEl('button', { cls: 'odk-action-btn' });
-    pullBtn.createDiv({ cls: 'odk-btn-title', text: '📥 다른 기기에서 그대로 동기화받기 (Pull)' });
+    const pullBtn = grid.createEl('button', { cls: 'odk-action-btn odk-primary' });
+    pullBtn.createDiv({ cls: 'odk-btn-title', text: '📥 구글 드라이브에서 동기화받기 (Pull)' });
     pullBtn.createDiv({
       cls: 'odk-btn-desc',
-      text: '구글 드라이브에 모셔둔 아카이브를 현재 기기로 똑같이 내려받아 동기화합니다.'
+      text: '구글 드라이브에 보관된 아카이브 중 새로 추가/변경된 파일만 현재 기기로 빠르게 내려받습니다.'
     });
     pullBtn.addEventListener('click', async () => {
       await this.plugin.runPullRestore(updateProgress);
+      this.onOpen();
+    });
+
+    const pushBtn = grid.createEl('button', { cls: 'odk-action-btn' });
+    pushBtn.createDiv({ cls: 'odk-btn-title', text: '☁️ 이 기기에서 구글 드라이브로 올리기 (Push)' });
+    pushBtn.createDiv({
+      cls: 'odk-btn-desc',
+      text: '이 기기에서 새로 작성하거나 수정한 파일을 구글 드라이브에 업로드합니다.'
+    });
+    pushBtn.addEventListener('click', async () => {
+      await this.plugin.runPushBackup(false, updateProgress);
       this.onOpen();
     });
 
@@ -935,7 +787,7 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: '☁️ Drive Vault Keeper 설정' });
+    containerEl.createEl('h2', { text: '☁️ Drive Vault Keeper 설정 (v1.0.3)' });
 
     new obsidian.Setting(containerEl)
       .setName('Google OAuth Client ID')
@@ -987,13 +839,13 @@ class DriveKeeperSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(containerEl)
       .setName('모바일/태블릿 단일 파일 최대 크기 제한 (MB)')
-      .setDesc('모바일 앱 메모리 초과(튕김) 방지를 위해 이 용량을 넘는 초고용량 PDF(예: 500MB 스캔본)는 태블릿에서 건너뜁니다. (기본: 80MB)')
+      .setDesc('태블릿 앱 메모리 보호를 위해 이 용량을 넘는 대용량 PDF는 태블릿에서 건너뜁니다. (기본: 25MB)')
       .addText((text) =>
         text
-          .setValue(String(this.plugin.settings.maxMobileFileSizeMB || 80))
+          .setValue(String(this.plugin.settings.maxMobileFileSizeMB || 25))
           .onChange(async (value) => {
             const num = parseInt(value, 10);
-            this.plugin.settings.maxMobileFileSizeMB = isNaN(num) ? 80 : num;
+            this.plugin.settings.maxMobileFileSizeMB = isNaN(num) ? 25 : num;
             await this.plugin.saveSettings();
           })
       );
